@@ -53,7 +53,7 @@ def random_dev_set():
     output_file.close()
 
 
-def random_remove_10():
+def random_10_percent_removed():
     sst_processor = Sst2Processor()
     all_examples = sst_processor.get_train_examples('glue_data/SST-2')
     negative_examples = [x for x in all_examples if x.label == '0']
@@ -63,7 +63,7 @@ def random_remove_10():
 
     print('randomly remove 10% training examples')
     for i in range(10):
-        path = 'data/SST-2/random_remove_10_percent_all_train/{}/'.format(i)
+        path = 'data/SST-2/random_10_percent_removed_both/{}/'.format(i)
         Path(path).mkdir(parents=True, exist_ok=True)
         output_file = open(path + 'train.tsv', 'w')
         output_file.write('sentence\tlabel\n')
@@ -74,7 +74,7 @@ def random_remove_10():
 
     print('randomly remove 10% training examples but only positive')
     for i in range(10):
-        path = 'data/SST-2/random_remove_10_percent_positive_train/{}/'.format(i)
+        path = 'data/SST-2/random_10_percent_removed_positive/{}/'.format(i)
         Path(path).mkdir(parents=True, exist_ok=True)
         output_file = open(path + 'train.tsv', 'w')
         output_file.write('sentence\tlabel\n')
@@ -87,7 +87,7 @@ def random_remove_10():
 
     print('randomly remove 10% training examples but only negative')
     for i in range(10):
-        path = 'data/SST-2/random_remove_10_percent_negative_train/{}/'.format(i)
+        path = 'data/SST-2/random_10_percent_removed_negative/{}/'.format(i)
         Path(path).mkdir(parents=True, exist_ok=True)
         output_file = open(path + 'train.tsv', 'w')
         output_file.write('sentence\tlabel\n')
@@ -99,13 +99,12 @@ def random_remove_10():
         output_file.close()
 
 
-def remove_positive_high_confidence():
-    print('remove 10% positive training examples with the highest confidence')
+def remove_by_confidence():
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments,
                                ExperimentArguments))
 
     model_args, data_args, training_args, experiment_args = parser.parse_json_file(
-        json_file=os.path.abspath('args.json'))
+        json_file=os.path.abspath('configs/sst2_base.json'))
 
     output_mode = glue_output_modes[data_args.task_name]
 
@@ -113,14 +112,14 @@ def remove_positive_high_confidence():
     tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir)
     model = AutoModelForSequenceClassification.from_pretrained(checkpoint_dir)
 
-    dev_data_args = deepcopy(data_args)
-    dev_data_args.data_dir = experiment_args.dev_data_dir
-
-    eval_dataset = (
-        GlueDataset(dev_data_args, tokenizer=tokenizer, local_rank=training_args.local_rank, evaluate=True)
-        if training_args.do_eval
-        else None
-    )
+    train_data_args = deepcopy(data_args)
+    eval_data_args = deepcopy(data_args)
+    train_data_args.data_dir = experiment_args.train_data_dir
+    eval_data_args.data_dir = experiment_args.eval_data_dir
+    train_dataset = GlueDataset(train_data_args, tokenizer=tokenizer,
+                                local_rank=training_args.local_rank)
+    eval_dataset = GlueDataset(eval_data_args, tokenizer=tokenizer,
+                               local_rank=training_args.local_rank, evaluate=True)
 
     def compute_metrics(p: EvalPrediction) -> Dict:
         if output_mode == "classification":
@@ -133,7 +132,7 @@ def remove_positive_high_confidence():
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=eval_dataset,
+        train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         compute_metrics=compute_metrics,
     )
@@ -141,8 +140,72 @@ def remove_positive_high_confidence():
     result = trainer.evaluate(eval_dataset=eval_dataset)
     print(result)
 
-    output = trainer.predict(eval_dataset)
-    nn.functional.softmax(torch.from_numpy(output.predictions), dim=-1)
+    output = trainer.predict(train_dataset)
+    scores = nn.functional.softmax(torch.from_numpy(output.predictions), dim=-1).numpy()
+    scores = np.choose(output.label_ids, scores.T)
+    indices = np.arange(len(scores))
+    positive_indices = indices[output.label_ids == 1]
+    negative_indices = indices[output.label_ids == 0]
+    positive_scores = scores[output.label_ids == 1]
+    negative_scores = scores[output.label_ids == 0]
+    
+    most_confident_positive_indices = positive_indices[np.argsort(-positive_scores)]
+    most_confident_negative_indices = negative_indices[np.argsort(-negative_scores)]
+    
+    train_examples = Sst2Processor().get_train_examples('data/SST-2/base')
+    n_removed = int(0.1 * len(train_examples))
+    
+    most_confident_positive_removed = (
+        [train_examples[i] for i in most_confident_positive_indices[n_removed:]]
+        + [train_examples[i] for i in negative_indices]
+    )
+    
+    least_confident_positive_removed = (
+        [train_examples[i] for i in most_confident_positive_indices[::-1][n_removed:]]
+        + [train_examples[i] for i in negative_indices]
+    )
+    
+    most_confident_negative_removed = (
+        [train_examples[i] for i in most_confident_negative_indices[n_removed:]]
+        + [train_examples[i] for i in positive_indices]
+    )
+    
+    least_confident_negative_removed = (
+        [train_examples[i] for i in most_confident_negative_indices[::-1][n_removed:]]
+        + [train_examples[i] for i in positive_indices]
+    )
+
+    path = 'data/SST-2/most_confident_10_percent_removed_positive/'
+    print(path)
+    Path(path).mkdir(parents=True, exist_ok=True)
+    with open(path + 'train.tsv', 'w') as output_file:
+        output_file.write('sentence\tlabel\n')
+        for example in most_confident_positive_removed:
+            output_file.write('{}\t{}\n'.format(example.text_a, example.label))
+
+    path = 'data/SST-2/most_confident_10_percent_removed_negative/'
+    print(path)
+    Path(path).mkdir(parents=True, exist_ok=True)
+    with open(path + 'train.tsv', 'w') as output_file:
+        output_file.write('sentence\tlabel\n')
+        for example in most_confident_negative_removed:
+            output_file.write('{}\t{}\n'.format(example.text_a, example.label))
+
+    path = 'data/SST-2/least_confident_10_percent_removed_positive/'
+    print(path)
+    Path(path).mkdir(parents=True, exist_ok=True)
+    with open(path + 'train.tsv', 'w') as output_file:
+        output_file.write('sentence\tlabel\n')
+        for example in least_confident_positive_removed:
+            output_file.write('{}\t{}\n'.format(example.text_a, example.label))
+
+    path = 'data/SST-2/least_confident_10_percent_removed_negative/'
+    print(path)
+    Path(path).mkdir(parents=True, exist_ok=True)
+    with open(path + 'train.tsv', 'w') as output_file:
+        output_file.write('sentence\tlabel\n')
+        for example in least_confident_negative_removed:
+            output_file.write('{}\t{}\n'.format(example.text_a, example.label))
 
 
 """
@@ -175,6 +238,6 @@ gradient-matching-worst
 
 
 if __name__ == '__main__':
-    # random_dev_set()
-    # random_remove_10()
-    remove_positive_high_confidence()
+    random_dev_set()
+    random_10_percent_removed()
+    remove_by_confidence()

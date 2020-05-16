@@ -67,8 +67,8 @@ class ExperimentArguments:
     train_data_dir: str = field(
         metadata={"help": "Training data folder that contains train.tsv."}
     )
-    dev_data_dir: str = field(
-        metadata={"help": "Dev data folder that contains dev.tsv."}
+    eval_data_dir: str = field(
+        metadata={"help": "Eval data folder that contains dev.tsv."}
     )
 
 
@@ -148,16 +148,16 @@ def main():
 
     # Get datasets
     train_data_args = deepcopy(data_args)
-    dev_data_args = deepcopy(data_args)
+    eval_data_args = deepcopy(data_args)
     train_data_args.data_dir = experiment_args.train_data_dir
-    dev_data_args.data_dir = experiment_args.dev_data_dir
+    eval_data_args.data_dir = experiment_args.eval_data_dir
     train_dataset = (
         GlueDataset(train_data_args, tokenizer=tokenizer, local_rank=training_args.local_rank)
         if training_args.do_train
         else None
     )
     eval_dataset = (
-        GlueDataset(dev_data_args, tokenizer=tokenizer, local_rank=training_args.local_rank, evaluate=True)
+        GlueDataset(eval_data_args, tokenizer=tokenizer, local_rank=training_args.local_rank, evaluate=True)
         if training_args.do_eval
         else None
     )
@@ -213,8 +213,6 @@ def main():
                 for key, value in result.items():
                     logger.info("  %s = %s", key, value)
                     writer.write("%s = %s\n" % (key, value))
-
-            results.update(result)
 
     return results
 
