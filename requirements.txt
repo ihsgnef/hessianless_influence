@@ -2,5 +2,5 @@ numpy
 scipy
 sklearn
 torch==1.5.0
-dataclasses==0.7
+dataclasses
 transformers==2.9.1
