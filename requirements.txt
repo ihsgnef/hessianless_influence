@@ -1,4 +1,4 @@
 numpy==1.18.4
 torch==1.5.0
-dataclasses==0.7
+dataclasses
 transformers==2.9.1
