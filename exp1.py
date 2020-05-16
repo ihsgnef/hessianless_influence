@@ -104,7 +104,7 @@ def remove_by_confidence():
                                ExperimentArguments))
 
     model_args, data_args, training_args, experiment_args = parser.parse_json_file(
-        json_file=os.path.abspath('configs/sst2_base.json'))
+        json_file=os.path.abspath('configs/SST-2/base.json'))
 
     output_mode = glue_output_modes[data_args.task_name]
 
@@ -148,28 +148,28 @@ def remove_by_confidence():
     negative_indices = indices[output.label_ids == 0]
     positive_scores = scores[output.label_ids == 1]
     negative_scores = scores[output.label_ids == 0]
-    
+
     most_confident_positive_indices = positive_indices[np.argsort(-positive_scores)]
     most_confident_negative_indices = negative_indices[np.argsort(-negative_scores)]
-    
+
     train_examples = Sst2Processor().get_train_examples('data/SST-2/base')
     n_removed = int(0.1 * len(train_examples))
-    
+
     most_confident_positive_removed = (
         [train_examples[i] for i in most_confident_positive_indices[n_removed:]]
         + [train_examples[i] for i in negative_indices]
     )
-    
+
     least_confident_positive_removed = (
         [train_examples[i] for i in most_confident_positive_indices[::-1][n_removed:]]
         + [train_examples[i] for i in negative_indices]
     )
-    
+
     most_confident_negative_removed = (
         [train_examples[i] for i in most_confident_negative_indices[n_removed:]]
         + [train_examples[i] for i in positive_indices]
     )
-    
+
     least_confident_negative_removed = (
         [train_examples[i] for i in most_confident_negative_indices[::-1][n_removed:]]
         + [train_examples[i] for i in positive_indices]
@@ -209,31 +209,14 @@ def remove_by_confidence():
 
 
 """
-positive_low_confidence: randomly remove 10% positive training examples with the lowest confidence
+representation-matching
+for each example in the target test set, find the training examples with the most similar final
+representation, accumulate the score over all test examples, remove the top 10%
 """
 
-"""
-negative_high_confidence
-"""
 
 """
-negative_low_confidence
-"""
-
-"""
-representation-matching-best: for each example in the target test set, find the training examples with the most similar final representation, accumulate the score over all test examples, remove the top 10%
-"""
-
-"""
-representation-matching-worst: repeat the above but remove the bottom 10%
-"""
-
-"""
-gradient-matching-best
-"""
-
-"""
-gradient-matching-worst
+gradient-matching
 """
 
 

@@ -1,4 +1,6 @@
-numpy==1.18.4
+numpy
+scipy
+sklearn
 torch==1.5.0
 dataclasses==0.7
 transformers==2.9.1

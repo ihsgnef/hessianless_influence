@@ -5,9 +5,10 @@
 #SBATCH --gres=gpu:1
 #SBATCH --job-name=sst2_random_10_percent_removed_negative_0
 #SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=20g
+#SBATCH --mem-per-cpu=8g
 #SBATCH --chdir=/fs/clip-quiz/shifeng/influenceless
 
+zsh
 hostname
 nvidia-smi
 conda activate v2.9.0
