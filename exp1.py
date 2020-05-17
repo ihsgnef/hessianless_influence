@@ -233,6 +233,7 @@ def setup(
 
     tokenizer = AutoTokenizer.from_pretrained(training_args.output_dir)
     model = AutoModelForSequenceClassification.from_pretrained(training_args.output_dir)
+    model = model.to(training_args.device)
 
     train_data_args = deepcopy(data_args)
     train_data_args.task_name = task_name
