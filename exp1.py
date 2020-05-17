@@ -29,10 +29,42 @@ random.seed(42)
 set_seed(42)
 
 
+def create_data_config(
+        config_name: str,
+        train_examples: list = None,
+        version_number: int = None,
+):
+    args = json.load(open('configs/SST-2/base.json'))
+
+    if version_number is not None:
+        config_name += '/' + str(version_number)
+    data_dir = 'data/SST-2/{}'.format(config_name)
+    output_dir = 'output/SST-2/{}'.format(config_name)
+    config_dir = 'configs/SST-2/{}.json'.format(config_name)
+    train_data_dir = os.path.join(data_dir, 'train.tsv')
+
+    Path(data_dir).mkdir(parents=True, exist_ok=True)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    Path(config_dir).parent.mkdir(parents=True, exist_ok=True)
+
+    print(config_dir)
+
+    args.update({
+        'train_data_dir': train_data_dir,
+        'output_dir': output_dir,
+    })
+    with open(config_dir, 'w') as f:
+        json.dump(args, f, indent=4)
+
+    with open(train_data_dir, 'w') as f:
+        f.write('sentence\tlabel\n')
+        for example in train_examples:
+            f.write('{}\t{}\n'.format(example.text_a, example.label))
+
+
 def random_dev_set():
-    print('creating random 50 dev examples')
     sst_processor = Sst2Processor()
-    dev_examples = sst_processor.get_dev_examples('glue_data/SST-2')
+    dev_examples = sst_processor.get_dev_examples('data/SST-2/base')
 
     datasets = {
         'all': dev_examples,
@@ -62,42 +94,32 @@ def random_10_percent_removed():
 
     n_examples_removed = int(0.1 * len(all_examples))  # remove 10% of all training examples
 
-    print('randomly remove 10% training examples')
     for i in range(10):
-        path = 'data/SST-2/random_10_percent_removed_both/{}/'.format(i)
-        Path(path).mkdir(parents=True, exist_ok=True)
-        output_file = open(path + 'train.tsv', 'w')
-        output_file.write('sentence\tlabel\n')
         random.shuffle(all_examples)
-        for example in all_examples[n_examples_removed:]:
-            output_file.write('{}\t{}\n'.format(example.text_a, example.label))
-        output_file.close()
+        train_examples = all_examples[n_examples_removed:]
+        create_data_config(
+            config_name='random_10_percent_removed_both',
+            train_examples=train_examples,
+            version_number=i,
+        )
 
-    print('randomly remove 10% training examples but only positive')
     for i in range(10):
-        path = 'data/SST-2/random_10_percent_removed_positive/{}/'.format(i)
-        Path(path).mkdir(parents=True, exist_ok=True)
-        output_file = open(path + 'train.tsv', 'w')
-        output_file.write('sentence\tlabel\n')
         random.shuffle(positive_examples)
-        for example in positive_examples[n_examples_removed:]:
-            output_file.write('{}\t{}\n'.format(example.text_a, example.label))
-        for example in negative_examples:
-            output_file.write('{}\t{}\n'.format(example.text_a, example.label))
-        output_file.close()
+        train_examples = positive_examples[n_examples_removed:] + negative_examples
+        create_data_config(
+            config_name='random_10_percent_removed_positive',
+            train_examples=train_examples,
+            version_number=i,
+        )
 
-    print('randomly remove 10% training examples but only negative')
     for i in range(10):
-        path = 'data/SST-2/random_10_percent_removed_negative/{}/'.format(i)
-        Path(path).mkdir(parents=True, exist_ok=True)
-        output_file = open(path + 'train.tsv', 'w')
-        output_file.write('sentence\tlabel\n')
         random.shuffle(negative_examples)
-        for example in negative_examples[n_examples_removed:]:
-            output_file.write('{}\t{}\n'.format(example.text_a, example.label))
-        for example in positive_examples:
-            output_file.write('{}\t{}\n'.format(example.text_a, example.label))
-        output_file.close()
+        train_examples = negative_examples[n_examples_removed:] + positive_examples
+        create_data_config(
+            config_name='random_10_percent_removed_negative',
+            train_examples=train_examples,
+            version_number=i,
+        )
 
 
 def setup(
@@ -192,37 +214,25 @@ def remove_by_confidence():
         + [train_examples[i] for i in positive_indices]
     )
 
-    path = 'data/SST-2/most_confident_10_percent_removed_positive/'
-    print(path)
-    Path(path).mkdir(parents=True, exist_ok=True)
-    with open(path + 'train.tsv', 'w') as output_file:
-        output_file.write('sentence\tlabel\n')
-        for example in most_confident_positive_removed:
-            output_file.write('{}\t{}\n'.format(example.text_a, example.label))
+    create_data_config(
+        config_name='most_confident_10_percent_removed_positive',
+        train_examples=most_confident_positive_removed,
+    )
 
-    path = 'data/SST-2/most_confident_10_percent_removed_negative/'
-    print(path)
-    Path(path).mkdir(parents=True, exist_ok=True)
-    with open(path + 'train.tsv', 'w') as output_file:
-        output_file.write('sentence\tlabel\n')
-        for example in most_confident_negative_removed:
-            output_file.write('{}\t{}\n'.format(example.text_a, example.label))
+    create_data_config(
+        config_name='most_confident_10_percent_removed_negative',
+        train_examples=most_confident_negative_removed,
+    )
 
-    path = 'data/SST-2/least_confident_10_percent_removed_positive/'
-    print(path)
-    Path(path).mkdir(parents=True, exist_ok=True)
-    with open(path + 'train.tsv', 'w') as output_file:
-        output_file.write('sentence\tlabel\n')
-        for example in least_confident_positive_removed:
-            output_file.write('{}\t{}\n'.format(example.text_a, example.label))
+    create_data_config(
+        config_name='least_confident_10_percent_removed_positive',
+        train_examples=least_confident_positive_removed,
+    )
 
-    path = 'data/SST-2/least_confident_10_percent_removed_negative/'
-    print(path)
-    Path(path).mkdir(parents=True, exist_ok=True)
-    with open(path + 'train.tsv', 'w') as output_file:
-        output_file.write('sentence\tlabel\n')
-        for example in least_confident_negative_removed:
-            output_file.write('{}\t{}\n'.format(example.text_a, example.label))
+    create_data_config(
+        config_name='least_confident_10_percent_removed_negative',
+        train_examples=least_confident_negative_removed,
+    )
 
 
 def compare_scores(args_dirs: str, eval_data_dir: str):
@@ -300,55 +310,24 @@ def remove_by_similarity():
     similarity = pooled_outputs['eval'] @ pooled_outputs['train'].T
 
     train_examples = Sst2Processor().get_train_examples('data/SST-2/base')
-    dev_examples = Sst2Processor().get_dev_examples('data/SST-2/random_50_dev')
     n_removed = int(0.1 * len(train_examples))
-
-    base_args = json.load(open('configs/SST-2/base.json'))
 
     for i in range(3):
         most_similar_indices = np.argsort(-similarity[i * 500: i * 500 + 500].mean(axis=0))
         most_similar_removed = [train_examples[i] for i in most_similar_indices[n_removed:]]
         least_similar_removed = [train_examples[i] for i in most_similar_indices[::-1][n_removed:]]
 
-        # remove most similar 10 percent
-        path = 'data/SST-2/most_similar_10_percent_removed/{}/'.format(i)
-        print(path)
-        Path(path).mkdir(parents=True, exist_ok=True)
+        create_data_config(
+            config_name='most_similar_10_percent_removed',
+            train_examples=most_similar_removed,
+            version_number=i,
+        )
 
-        args = deepcopy(base_args)
-        args['train_data_dir'] = path + 'train.tsv'
-        args['eval_data_dir'] = path + 'dev.tsv'
-        with open('configs/SST-2/most_similar_10_percent_removed_{}.json/'.format(i), 'w') as f:
-            json.dump(args, f)
-
-        with open(path + 'train.tsv', 'w') as output_file:
-            output_file.write('sentence\tlabel\n')
-            for example in most_similar_removed:
-                output_file.write('{}\t{}\n'.format(example.text_a, example.label))
-        with open(path + 'dev.tsv', 'w') as output_file:
-            output_file.write('sentence\tlabel\n')
-            for example in dev_examples[i * 500: i * 500 + 500]:
-                output_file.write('{}\t{}\n'.format(example.text_a, example.label))
-
-        # remove least similar 10 percent
-        path = 'data/SST-2/least_similar_10_percent_removed/{}/'.format(i)
-        print(path)
-        Path(path).mkdir(parents=True, exist_ok=True)
-
-        args = deepcopy(base_args)
-        args['train_data_dir'] = path + 'train.tsv'
-        args['eval_data_dir'] = path + 'dev.tsv'
-        with open('configs/SST-2/most_similar_10_percent_removed_{}.json/'.format(i), 'w') as f:
-            json.dump(args, f)
-
-        with open(path + 'train.tsv', 'w') as output_file:
-            output_file.write('sentence\tlabel\n')
-            for example in least_similar_removed:
-                output_file.write('{}\t{}\n'.format(example.text_a, example.label))
-        with open(path + 'dev.tsv', 'w') as output_file:
-            output_file.write('sentence\tlabel\n')
-            for example in dev_examples[i * 500: i * 500 + 500]:
-                output_file.write('{}\t{}\n'.format(example.text_a, example.label))
+        create_data_config(
+            config_name='least_similar_10_percent_removed',
+            train_examples=least_similar_removed,
+            version_number=i,
+        )
 
 
 """
@@ -357,9 +336,9 @@ gradient-matching
 
 
 if __name__ == '__main__':
-    # random_dev_set()
-    # random_10_percent_removed()
-    # remove_by_confidence()
+    random_dev_set()
+    random_10_percent_removed()
+    remove_by_confidence()
     # compare_scores(
     #     args_dirs=[
     #         'configs/SST-2/random_10_percent_removed_both_0.json',
