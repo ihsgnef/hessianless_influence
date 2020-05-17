@@ -50,7 +50,7 @@ def create_data_config(
     print(config_dir)
 
     args.update({
-        'train_data_dir': train_data_dir,
+        'train_data_dir': data_dir,
         'output_dir': output_dir,
     })
     with open(config_dir, 'w') as f:
