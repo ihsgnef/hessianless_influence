@@ -1,11 +1,12 @@
-import random
-from pathlib import Path
-
 import os
+import json
+import random
+import numpy as np
+from pathlib import Path
 from typing import Dict
 from copy import deepcopy
+from tqdm import tqdm
 
-import numpy as np
 import torch
 import torch.nn as nn
 
@@ -99,20 +100,27 @@ def random_10_percent_removed():
         output_file.close()
 
 
-def remove_by_confidence():
+def setup(
+    args_dir: str,
+    train_data_dir: str = None,
+    eval_data_dir: str = None,
+):
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments,
                                ExperimentArguments))
 
     model_args, data_args, training_args, experiment_args = parser.parse_json_file(
-        json_file=os.path.abspath('configs/SST-2/base.json'))
-    # use mnli processor to process snli data
+        json_file=os.path.abspath(args_dir))
     task_name = 'mnli' if data_args.task_name == 'snli' else data_args.task_name
+    if train_data_dir is not None:
+        experiment_args.train_data_dir = train_data_dir
+    if eval_data_dir is not None:
+        experiment_args.eval_data_dir = eval_data_dir
 
     output_mode = glue_output_modes[task_name]
 
-    checkpoint_dir = 'output/SST-2/base/'
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir)
-    model = AutoModelForSequenceClassification.from_pretrained(checkpoint_dir)
+    tokenizer = AutoTokenizer.from_pretrained(training_args.output_dir)
+    model = AutoModelForSequenceClassification.from_pretrained(training_args.output_dir)
+    model = model.to(training_args.device)
 
     train_data_args = deepcopy(data_args)
     train_data_args.task_name = task_name
@@ -121,6 +129,7 @@ def remove_by_confidence():
     eval_data_args = deepcopy(data_args)
     eval_data_args.task_name = task_name
     eval_data_args.data_dir = experiment_args.eval_data_dir
+
     train_dataset = GlueDataset(train_data_args, tokenizer=tokenizer,
                                 local_rank=training_args.local_rank)
     eval_dataset = GlueDataset(eval_data_args, tokenizer=tokenizer,
@@ -142,8 +151,11 @@ def remove_by_confidence():
         compute_metrics=compute_metrics,
     )
 
-    result = trainer.evaluate(eval_dataset=eval_dataset)
-    print(result)
+    return model, trainer, train_dataset, eval_dataset
+
+
+def remove_by_confidence():
+    model, trainer, train_dataset, eval_dataset = setup(args_dir='configs/SST-2/base.json')
 
     output = trainer.predict(train_dataset)
     scores = nn.functional.softmax(torch.from_numpy(output.predictions), dim=-1).numpy()
@@ -213,73 +225,7 @@ def remove_by_confidence():
             output_file.write('{}\t{}\n'.format(example.text_a, example.label))
 
 
-def setup(
-    args_dir: str,
-    train_data_dir: str = None,
-    eval_data_dir: str = None,
-):
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments,
-                               ExperimentArguments))
-
-    model_args, data_args, training_args, experiment_args = parser.parse_json_file(
-        json_file=os.path.abspath(args_dir))
-    task_name = 'mnli' if data_args.task_name == 'snli' else data_args.task_name
-    if train_data_dir is not None:
-        experiment_args.train_data_dir = train_data_dir
-    if eval_data_dir is not None:
-        experiment_args.eval_data_dir = eval_data_dir
-
-    output_mode = glue_output_modes[task_name]
-
-    tokenizer = AutoTokenizer.from_pretrained(training_args.output_dir)
-    model = AutoModelForSequenceClassification.from_pretrained(training_args.output_dir)
-    model = model.to(training_args.device)
-
-    train_data_args = deepcopy(data_args)
-    train_data_args.task_name = task_name
-    train_data_args.data_dir = experiment_args.train_data_dir
-
-    eval_data_args = deepcopy(data_args)
-    eval_data_args.task_name = task_name
-    eval_data_args.data_dir = experiment_args.eval_data_dir
-
-    train_dataset = GlueDataset(train_data_args, tokenizer=tokenizer,
-                                local_rank=training_args.local_rank)
-    eval_dataset = GlueDataset(eval_data_args, tokenizer=tokenizer,
-                               local_rank=training_args.local_rank, evaluate=True)
-
-    def compute_metrics(p: EvalPrediction) -> Dict:
-        if output_mode == "classification":
-            preds = np.argmax(p.predictions, axis=1)
-        elif output_mode == "regression":
-            preds = np.squeeze(p.predictions)
-        return glue_compute_metrics(task_name, preds, p.label_ids)
-
-    # Initialize our Trainer
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        compute_metrics=compute_metrics,
-    )
-
-    return model, trainer, train_dataset, eval_dataset
-
-def compare_scores():
-    args_dirs = [
-        'configs/SST-2/random_10_percent_removed_both_1.json',
-        'configs/SST-2/random_10_percent_removed_both_2.json',
-        'configs/SST-2/random_10_percent_removed_both_3.json',
-        # 'configs/SST-2/random_10_percent_removed_positive_0.json',
-        # 'configs/SST-2/random_10_percent_removed_negative_0.json',
-        # 'configs/SST-2/most_confident_10_percent_removed_positive.json',
-        # 'configs/SST-2/most_confident_10_percent_removed_negative.json',
-        # 'configs/SST-2/least_confident_10_percent_removed_positive.json',
-        # 'configs/SST-2/least_confident_10_percent_removed_negative.json',
-    ]
-    eval_data_dir = 'data/SST-2/random_50_dev'
-
+def compare_scores(args_dirs: str, eval_data_dir: str):
     model, trainer, train_dataset, eval_dataset = setup(args_dir='configs/SST-2/base.json',
                                                         eval_data_dir=eval_data_dir)
     output = trainer.predict(eval_dataset)
@@ -324,11 +270,85 @@ def compare_scores():
             np.std(trials) * 100))
 
 
-"""
-representation-matching
-for each example in the target test set, find the training examples with the most similar final
-representation, accumulate the score over all test examples, remove the top 10%
-"""
+def remove_by_similarity():
+    """
+    for each example in the target test set, find the training examples with the most similar final
+    representation, accumulate the score over all test examples, remove the top 10%
+    """
+    model, trainer, train_dataset, eval_dataset = setup(args_dir='configs/SST-2/base.json',
+                                                        eval_data_dir='data/SST-2/random_50_dev')
+    model.eval()
+
+    dataloaders = {
+        'eval': trainer.get_eval_dataloader(eval_dataset),
+        'train': trainer.get_eval_dataloader(train_dataset),
+    }
+    pooled_outputs = {'train': [], 'eval': []}
+    for fold, dataloader in dataloaders.items():
+        for inputs in tqdm(dataloader):
+            for k, v in inputs.items():
+                inputs[k] = v.to(model.device)
+            with torch.no_grad():
+                outputs = model.bert(
+                    input_ids=inputs['input_ids'],
+                    attention_mask=inputs['attention_mask'],
+                    token_type_ids=inputs['token_type_ids'],
+                )
+                pooled_output = outputs[1]
+                pooled_outputs[fold].append(pooled_output.detach().cpu().numpy())
+    pooled_outputs = {k: np.concatenate(v, axis=0) for k, v in pooled_outputs.items()}
+    similarity = pooled_outputs['eval'] @ pooled_outputs['train'].T
+
+    train_examples = Sst2Processor().get_train_examples('data/SST-2/base')
+    dev_examples = Sst2Processor().get_dev_examples('data/SST-2/random_50_dev')
+    n_removed = int(0.1 * len(train_examples))
+
+    base_args = json.load(open('configs/SST-2/base.json'))
+
+    for i in range(3):
+        most_similar_indices = np.argsort(-similarity[i * 500: i * 500 + 500].mean(axis=0))
+        most_similar_removed = [train_examples[i] for i in most_similar_indices[n_removed:]]
+        least_similar_removed = [train_examples[i] for i in most_similar_indices[::-1][n_removed:]]
+
+        # remove most similar 10 percent
+        path = 'data/SST-2/most_similar_10_percent_removed/{}/'.format(i)
+        print(path)
+        Path(path).mkdir(parents=True, exist_ok=True)
+
+        args = deepcopy(base_args)
+        args['train_data_dir'] = path + 'train.tsv'
+        args['eval_data_dir'] = path + 'dev.tsv'
+        with open('configs/SST-2/most_similar_10_percent_removed_{}.json/'.format(i), 'w') as f:
+            json.dump(args, f)
+
+        with open(path + 'train.tsv', 'w') as output_file:
+            output_file.write('sentence\tlabel\n')
+            for example in most_similar_removed:
+                output_file.write('{}\t{}\n'.format(example.text_a, example.label))
+        with open(path + 'dev.tsv', 'w') as output_file:
+            output_file.write('sentence\tlabel\n')
+            for example in dev_examples[i * 500: i * 500 + 500]:
+                output_file.write('{}\t{}\n'.format(example.text_a, example.label))
+
+        # remove least similar 10 percent
+        path = 'data/SST-2/least_similar_10_percent_removed/{}/'.format(i)
+        print(path)
+        Path(path).mkdir(parents=True, exist_ok=True)
+
+        args = deepcopy(base_args)
+        args['train_data_dir'] = path + 'train.tsv'
+        args['eval_data_dir'] = path + 'dev.tsv'
+        with open('configs/SST-2/most_similar_10_percent_removed_{}.json/'.format(i), 'w') as f:
+            json.dump(args, f)
+
+        with open(path + 'train.tsv', 'w') as output_file:
+            output_file.write('sentence\tlabel\n')
+            for example in least_similar_removed:
+                output_file.write('{}\t{}\n'.format(example.text_a, example.label))
+        with open(path + 'dev.tsv', 'w') as output_file:
+            output_file.write('sentence\tlabel\n')
+            for example in dev_examples[i * 500: i * 500 + 500]:
+                output_file.write('{}\t{}\n'.format(example.text_a, example.label))
 
 
 """
@@ -340,4 +360,16 @@ if __name__ == '__main__':
     # random_dev_set()
     # random_10_percent_removed()
     # remove_by_confidence()
-    compare_scores()
+    # compare_scores(
+    #     args_dirs=[
+    #         'configs/SST-2/random_10_percent_removed_both_0.json',
+    #         'configs/SST-2/random_10_percent_removed_positive_0.json',
+    #         'configs/SST-2/random_10_percent_removed_negative_0.json',
+    #         'configs/SST-2/most_confident_10_percent_removed_positive.json',
+    #         'configs/SST-2/most_confident_10_percent_removed_negative.json',
+    #         'configs/SST-2/least_confident_10_percent_removed_positive.json',
+    #         'configs/SST-2/least_confident_10_percent_removed_negative.json',
+    #     ],
+    #     eval_data_dir='data/SST-2/random_50_dev'
+    # )
+    remove_by_similarity()
