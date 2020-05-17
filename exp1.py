@@ -132,24 +132,21 @@ def setup(
 
     model_args, data_args, training_args, experiment_args = parser.parse_json_file(
         json_file=os.path.abspath(args_dir))
-    task_name = 'mnli' if data_args.task_name == 'snli' else data_args.task_name
     if train_data_dir is not None:
         experiment_args.train_data_dir = train_data_dir
     if eval_data_dir is not None:
         experiment_args.eval_data_dir = eval_data_dir
 
-    output_mode = glue_output_modes[task_name]
+    output_mode = glue_output_modes[data_args.task_name]
 
     tokenizer = AutoTokenizer.from_pretrained(training_args.output_dir)
     model = AutoModelForSequenceClassification.from_pretrained(training_args.output_dir)
     model = model.to(training_args.device)
 
     train_data_args = deepcopy(data_args)
-    train_data_args.task_name = task_name
     train_data_args.data_dir = experiment_args.train_data_dir
 
     eval_data_args = deepcopy(data_args)
-    eval_data_args.task_name = task_name
     eval_data_args.data_dir = experiment_args.eval_data_dir
 
     train_dataset = GlueDataset(train_data_args, tokenizer=tokenizer,
@@ -162,7 +159,7 @@ def setup(
             preds = np.argmax(p.predictions, axis=1)
         elif output_mode == "regression":
             preds = np.squeeze(p.predictions)
-        return glue_compute_metrics(task_name, preds, p.label_ids)
+        return glue_compute_metrics(data_args.task_name, preds, p.label_ids)
 
     # Initialize our Trainer
     trainer = Trainer(

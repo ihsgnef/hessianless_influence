@@ -88,8 +88,6 @@ def main():
             json_file=os.path.abspath(sys.argv[1]))
     else:
         model_args, data_args, training_args, experiment_args = parser.parse_args_into_dataclasses()
-    # use mnli processor to process snli data
-    task_name = 'mnli' if data_args.task_name == 'snli' else data_args.task_name
 
     if (
         os.path.exists(training_args.output_dir)
@@ -121,10 +119,10 @@ def main():
     set_seed(training_args.seed)
 
     try:
-        num_labels = glue_tasks_num_labels[task_name]
-        output_mode = glue_output_modes[task_name]
+        num_labels = glue_tasks_num_labels[data_args.task_name]
+        output_mode = glue_output_modes[data_args.task_name]
     except KeyError:
-        raise ValueError("Task not found: %s" % (task_name))
+        raise ValueError("Task not found: %s" % (data_args.task_name))
 
     # Load pretrained model and tokenizer
     #
@@ -135,7 +133,7 @@ def main():
     config = AutoConfig.from_pretrained(
         model_args.config_name if model_args.config_name else model_args.model_name_or_path,
         num_labels=num_labels,
-        finetuning_task=task_name,
+        finetuning_task=data_args.task_name,
         cache_dir=model_args.cache_dir,
     )
     tokenizer = AutoTokenizer.from_pretrained(
@@ -160,11 +158,9 @@ def main():
 
     # Get datasets
     train_data_args = deepcopy(data_args)
-    train_data_args.task_name = task_name
     train_data_args.data_dir = experiment_args.train_data_dir
 
     eval_data_args = deepcopy(data_args)
-    eval_data_args.task_name = task_name
     eval_data_args.data_dir = experiment_args.eval_data_dir
 
     train_dataset = (
@@ -183,7 +179,7 @@ def main():
             preds = np.argmax(p.predictions, axis=1)
         elif output_mode == "regression":
             preds = np.squeeze(p.predictions)
-        return glue_compute_metrics(task_name, preds, p.label_ids)
+        return glue_compute_metrics(data_args.task_name, preds, p.label_ids)
 
     # Initialize our Trainer
     trainer = Trainer(
