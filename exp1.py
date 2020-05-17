@@ -105,16 +105,21 @@ def remove_by_confidence():
 
     model_args, data_args, training_args, experiment_args = parser.parse_json_file(
         json_file=os.path.abspath('configs/SST-2/base.json'))
+    # use mnli processor to process snli data
+    task_name = 'mnli' if data_args.task_name == 'snli' else data_args.task_name
 
-    output_mode = glue_output_modes[data_args.task_name]
+    output_mode = glue_output_modes[task_name]
 
     checkpoint_dir = 'output/SST-2/base/'
     tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir)
     model = AutoModelForSequenceClassification.from_pretrained(checkpoint_dir)
 
     train_data_args = deepcopy(data_args)
-    eval_data_args = deepcopy(data_args)
+    train_data_args.task_name = task_name
     train_data_args.data_dir = experiment_args.train_data_dir
+
+    eval_data_args = deepcopy(data_args)
+    eval_data_args.task_name = task_name
     eval_data_args.data_dir = experiment_args.eval_data_dir
     train_dataset = GlueDataset(train_data_args, tokenizer=tokenizer,
                                 local_rank=training_args.local_rank)
@@ -126,7 +131,7 @@ def remove_by_confidence():
             preds = np.argmax(p.predictions, axis=1)
         elif output_mode == "regression":
             preds = np.squeeze(p.predictions)
-        return glue_compute_metrics(data_args.task_name, preds, p.label_ids)
+        return glue_compute_metrics(task_name, preds, p.label_ids)
 
     # Initialize our Trainer
     trainer = Trainer(
@@ -208,6 +213,114 @@ def remove_by_confidence():
             output_file.write('{}\t{}\n'.format(example.text_a, example.label))
 
 
+def setup(
+    args_dir: str,
+    train_data_dir: str = None,
+    eval_data_dir: str = None,
+):
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments,
+                               ExperimentArguments))
+
+    model_args, data_args, training_args, experiment_args = parser.parse_json_file(
+        json_file=os.path.abspath(args_dir))
+    task_name = 'mnli' if data_args.task_name == 'snli' else data_args.task_name
+    if train_data_dir is not None:
+        experiment_args.train_data_dir = train_data_dir
+    if eval_data_dir is not None:
+        experiment_args.eval_data_dir = eval_data_dir
+
+    output_mode = glue_output_modes[task_name]
+
+    tokenizer = AutoTokenizer.from_pretrained(training_args.output_dir)
+    model = AutoModelForSequenceClassification.from_pretrained(training_args.output_dir)
+
+    train_data_args = deepcopy(data_args)
+    train_data_args.task_name = task_name
+    train_data_args.data_dir = experiment_args.train_data_dir
+
+    eval_data_args = deepcopy(data_args)
+    eval_data_args.task_name = task_name
+    eval_data_args.data_dir = experiment_args.eval_data_dir
+
+    train_dataset = GlueDataset(train_data_args, tokenizer=tokenizer,
+                                local_rank=training_args.local_rank)
+    eval_dataset = GlueDataset(eval_data_args, tokenizer=tokenizer,
+                               local_rank=training_args.local_rank, evaluate=True)
+
+    def compute_metrics(p: EvalPrediction) -> Dict:
+        if output_mode == "classification":
+            preds = np.argmax(p.predictions, axis=1)
+        elif output_mode == "regression":
+            preds = np.squeeze(p.predictions)
+        return glue_compute_metrics(task_name, preds, p.label_ids)
+
+    # Initialize our Trainer
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        compute_metrics=compute_metrics,
+    )
+
+    return model, trainer, train_dataset, eval_dataset
+
+def compare_scores():
+    args_dirs = [
+        'configs/SST-2/random_10_percent_removed_both_0.json',
+        'configs/SST-2/random_10_percent_removed_positive_0.json',
+        'configs/SST-2/random_10_percent_removed_negative_0.json',
+        'configs/SST-2/most_confident_10_percent_removed_positive.json',
+        'configs/SST-2/most_confident_10_percent_removed_negative.json',
+        'configs/SST-2/least_confident_10_percent_removed_positive.json',
+        'configs/SST-2/least_confident_10_percent_removed_negative.json',
+    ]
+    eval_data_dir = 'data/SST-2/random_50_dev'
+
+    model, trainer, train_dataset, eval_dataset = setup(args_dir='configs/SST-2/base.json',
+                                                        eval_data_dir=eval_data_dir)
+    output = trainer.predict(eval_dataset)
+    scores_original = np.choose(
+        output.label_ids,
+        nn.functional.softmax(torch.from_numpy(output.predictions), dim=-1).numpy().T,
+    )
+
+    for args_dir in args_dirs:
+        print(args_dir)
+        model, trainer, train_dataset, eval_dataset = setup(args_dir=args_dir,
+                                                            eval_data_dir=eval_data_dir)
+        output = trainer.predict(eval_dataset)
+        scores_modified = np.choose(
+            output.label_ids,
+            nn.functional.softmax(torch.from_numpy(output.predictions), dim=-1).numpy().T,
+        )
+
+        scores_diff = scores_modified - scores_original
+        trials = []
+        for i in range(0, 500, 50):
+            trials.append(np.mean(scores_diff[i:i + 50]))
+        print('combined {}{:.4f}% (±{:.4f})'.format(
+            '+' if np.mean(trials) > 0 else '',
+            np.mean(trials) * 100,
+            np.std(trials) * 100))
+
+        trials = []
+        for i in range(500, 1000, 50):
+            trials.append(np.mean(scores_diff[i:i + 50]))
+        print('negative {}{:.4f}% (±{:.4f})'.format(
+            '+' if np.mean(trials) > 0 else '',
+            np.mean(trials) * 100,
+            np.std(trials) * 100))
+
+        trials = []
+        for i in range(1000, 1500, 50):
+            trials.append(np.mean(scores_diff[i:i + 50]))
+        print('positive {}{:.4f}% (±{:.4f})'.format(
+            '+' if np.mean(trials) > 0 else '',
+            np.mean(trials) * 100,
+            np.std(trials) * 100))
+
+
 """
 representation-matching
 for each example in the target test set, find the training examples with the most similar final
@@ -221,6 +334,7 @@ gradient-matching
 
 
 if __name__ == '__main__':
-    random_dev_set()
-    random_10_percent_removed()
-    remove_by_confidence()
+    # random_dev_set()
+    # random_10_percent_removed()
+    # remove_by_confidence()
+    compare_scores()
