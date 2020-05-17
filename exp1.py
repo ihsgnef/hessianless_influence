@@ -268,13 +268,15 @@ def setup(
 
 def compare_scores():
     args_dirs = [
-        'configs/SST-2/random_10_percent_removed_both_0.json',
-        'configs/SST-2/random_10_percent_removed_positive_0.json',
-        'configs/SST-2/random_10_percent_removed_negative_0.json',
-        'configs/SST-2/most_confident_10_percent_removed_positive.json',
-        'configs/SST-2/most_confident_10_percent_removed_negative.json',
-        'configs/SST-2/least_confident_10_percent_removed_positive.json',
-        'configs/SST-2/least_confident_10_percent_removed_negative.json',
+        'configs/SST-2/random_10_percent_removed_both_1.json',
+        'configs/SST-2/random_10_percent_removed_both_2.json',
+        'configs/SST-2/random_10_percent_removed_both_3.json',
+        # 'configs/SST-2/random_10_percent_removed_positive_0.json',
+        # 'configs/SST-2/random_10_percent_removed_negative_0.json',
+        # 'configs/SST-2/most_confident_10_percent_removed_positive.json',
+        # 'configs/SST-2/most_confident_10_percent_removed_negative.json',
+        # 'configs/SST-2/least_confident_10_percent_removed_positive.json',
+        # 'configs/SST-2/least_confident_10_percent_removed_negative.json',
     ]
     eval_data_dir = 'data/SST-2/random_50_dev'
 
