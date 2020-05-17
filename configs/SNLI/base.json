@@ -1,6 +1,6 @@
 {
-  "model_type": "bert",
-  "model_name_or_path": "bert-base-cased",
+  "model_type": "distilbert",
+  "model_name_or_path": "distilbert-base-uncased",
   "task_name": "SNLI",
   "do_train": true,
   "do_eval": true,

@@ -233,8 +233,7 @@ def remove_by_confidence():
 
 
 def compare_scores(args_dirs: str):
-    eval_data_dir='data/SST-2/random_50_dev'
-
+    eval_data_dir = 'data/SST-2/random_50_dev'
     model, trainer, train_dataset, eval_dataset = setup(args_dir='configs/SST-2/base.json',
                                                         eval_data_dir=eval_data_dir)
     output = trainer.predict(eval_dataset)
@@ -338,19 +337,22 @@ if __name__ == '__main__':
     # random_dev_set()
     # remove_by_random()
     # remove_by_confidence()
-    compare_scores(
-        args_dirs=[
-            'configs/SST-2/most_similar_10_percent_removed/0.json',
-            'configs/SST-2/most_similar_10_percent_removed/1.json',
-            'configs/SST-2/most_similar_10_percent_removed/2.json',
-            'configs/SST-2/least_similar_10_percent_removed/0.json',
-    #         'configs/SST-2/random_10_percent_removed_both_0.json',
-    #         'configs/SST-2/random_10_percent_removed_positive_0.json',
-    #         'configs/SST-2/random_10_percent_removed_negative_0.json',
-    #         'configs/SST-2/most_confident_10_percent_removed_positive.json',
-    #         'configs/SST-2/most_confident_10_percent_removed_negative.json',
-    #         'configs/SST-2/least_confident_10_percent_removed_positive.json',
-    #         'configs/SST-2/least_confident_10_percent_removed_negative.json',
-        ]
-    )
     # remove_by_similarity()
+    # compare_scores(
+    #     args_dirs=[
+    #         # 'configs/SST-2/most_similar_10_percent_removed/0.json',
+    #         # 'configs/SST-2/most_similar_10_percent_removed/1.json',
+    #         # 'configs/SST-2/most_similar_10_percent_removed/2.json',
+    #         'configs/SST-2/least_similar_10_percent_removed/0.json',
+    #         'configs/SST-2/least_similar_10_percent_removed/1.json',
+    #         'configs/SST-2/least_similar_10_percent_removed/2.json',
+    #         # 'configs/SST-2/random_10_percent_removed_both/0.json',
+    #         # 'configs/SST-2/random_10_percent_removed_positive/0.json',
+    #         # 'configs/SST-2/random_10_percent_removed_negative/0.json',
+    #         # 'configs/SST-2/most_confident_10_percent_removed_positive.json',
+    #         # 'configs/SST-2/most_confident_10_percent_removed_negative.json',
+    #         # 'configs/SST-2/least_confident_10_percent_removed_positive.json',
+    #         # 'configs/SST-2/least_confident_10_percent_removed_negative.json',
+    #     ]
+    # )
+    pass
