@@ -81,17 +81,18 @@ def setup(
 
 
 def create_data_config(
+        task_name: str,
         config_name: str,
         train_examples: list = None,
         version_number: int = None,
 ):
-    args = json.load(open('configs/SST-2/base.json'))
+    args = json.load(open('configs/{}/base.json'.format(task_name)))
 
     if version_number is not None:
         config_name += '/' + str(version_number)
-    data_dir = 'data/SST-2/{}'.format(config_name)
-    output_dir = 'output/SST-2/{}'.format(config_name)
-    config_dir = 'configs/SST-2/{}.json'.format(config_name)
+    data_dir = 'data/{}/{}'.format(task_name, config_name)
+    output_dir = 'output/{}/{}'.format(task_name, config_name)
+    config_dir = 'configs/{}/{}.json'.format(task_name, config_name)
     train_data_dir = os.path.join(data_dir, 'train.tsv')
 
     Path(data_dir).mkdir(parents=True, exist_ok=True)
@@ -107,10 +108,20 @@ def create_data_config(
     with open(config_dir, 'w') as f:
         json.dump(args, f, indent=4)
 
-    with open(train_data_dir, 'w') as f:
-        f.write('sentence\tlabel\n')
-        for example in train_examples:
-            f.write('{}\t{}\n'.format(example.text_a, example.label))
+    if task_name == 'SST-2':
+        with open(train_data_dir, 'w') as f:
+            f.write('sentence\tlabel\n')
+            for example in train_examples:
+                f.write('{}\t{}\n'.format(example.text_a, example.label))
+
+    if task_name == 'SNLI':
+        with open(train_data_dir, 'w') as f:
+            f.write(('Index\t' + 'NULL\t' * 6
+                     + 'sentence1\tsentence2\t' + 'NULL\t' * 5
+                     + 'gold_label\n'))
+            for i, example in enumerate(train_examples):
+                f.write(('{}\t' + 'NULL\t' * 6 + '{}\t{}\t' + 'NULL\t' * 5 + '{}\n').format(
+                    i, example.text_a, example.text_b, example.label))
 
 
 def random_dev_set():
@@ -146,6 +157,7 @@ def remove_by_random():
     for i in range(10):
         random.shuffle(all_examples)
         create_data_config(
+            'SST-2',
             config_name='random_10_percent_removed_combined',
             train_examples=all_examples[n_examples_removed:],
             version_number=i,
@@ -154,6 +166,7 @@ def remove_by_random():
     for i in range(10):
         random.shuffle(positive_examples)
         create_data_config(
+            'SST-2',
             config_name='random_10_percent_removed_positive',
             train_examples=positive_examples[n_examples_removed:] + negative_examples,
             version_number=i,
@@ -162,6 +175,7 @@ def remove_by_random():
     for i in range(10):
         random.shuffle(negative_examples)
         create_data_config(
+            'SST-2',
             config_name='random_10_percent_removed_negative',
             train_examples=negative_examples[n_examples_removed:] + positive_examples,
             version_number=i,
@@ -214,6 +228,7 @@ def remove_by_confidence():
 
     for config_name, train_examples in datasets.items():
         create_data_config(
+            'SST-2',
             config_name=config_name,
             train_examples=train_examples,
         )
@@ -261,11 +276,13 @@ def remove_by_similarity():
         most_similar_indices = np.argsort(-similarity[indices].mean(axis=0))
 
         create_data_config(
+            'SST-2',
             config_name='most_similar_to_{}_dev_removed'.format(fold),
             train_examples=[train_examples[i] for i in most_similar_indices[n_removed:]],
         )
 
         create_data_config(
+            'SST-2',
             config_name='least_similar_to_{}_dev_removed'.format(fold),
             train_examples=[train_examples[i] for i in most_similar_indices[::-1][n_removed:]],
         )
@@ -273,52 +290,73 @@ def remove_by_similarity():
 
 def compare_scores(args_dirs: str):
     model, trainer, train_dataset, eval_dataset = setup(args_dir='configs/SST-2/base.json')
-    output = trainer.predict(eval_dataset)
+    output_original = trainer.predict(eval_dataset)
     scores_original = np.choose(
-        output.label_ids,
-        F.softmax(torch.from_numpy(output.predictions), dim=-1).numpy().T,
+        output_original.label_ids,
+        F.softmax(torch.from_numpy(output_original.predictions), dim=-1).numpy().T,
     )
+    predictions_original = np.argmax(output_original.predictions, axis=1)
+    print('original predictions: {} positive {} negative'.format(
+        sum(predictions_original),
+        len(predictions_original) - sum(predictions_original)
+    ))
+
+    print('original labels: {} positive {} negative'.format(
+        sum(output_original.label_ids),
+        len(output_original.label_ids) - sum(output_original.label_ids)
+    ))
 
     for args_dir in args_dirs:
         print(args_dir)
         model, trainer, _, _ = setup(args_dir=args_dir)
-        output = trainer.predict(eval_dataset)
-        scores_modified = np.choose(
-            output.label_ids,
-            F.softmax(torch.from_numpy(output.predictions), dim=-1).numpy().T,
-        )
+        output_modified = trainer.predict(eval_dataset)
+        predictions_modified = np.argmax(output_modified.predictions, axis=1)
+        predictions = {
+            'combined': predictions_modified,
+            'negative': predictions_modified[output_modified.label_ids == 0],
+            'positive': predictions_modified[output_modified.label_ids == 1],
+        }
 
+        scores_modified = np.choose(
+            output_modified.label_ids,
+            F.softmax(torch.from_numpy(output_modified.predictions), dim=-1).numpy().T,
+        )
         scores_diff = {
             'combined': scores_modified - scores_original,
-            'negative': (scores_modified - scores_original)[output.label_ids == 0],
-            'positive': (scores_modified - scores_original)[output.label_ids == 1],
+            'negative': (scores_modified - scores_original)[output_modified.label_ids == 0],
+            'positive': (scores_modified - scores_original)[output_modified.label_ids == 1],
         }
 
         for fold, diff in scores_diff.items():
-            print('fold {}{:.4f}%'.format(
-                '+' if np.mean(diff) > 0 else '',
-                np.mean(diff) * 100,
+            print('{} predictions: {} positive {} negative'.format(
+                fold,
+                sum(predictions[fold]),
+                len(predictions[fold]) - sum(predictions[fold])
             ))
+            print('{}: {}{:.4f}%'.format(fold, '+' if np.mean(diff) > 0 else '',
+                                         np.mean(diff) * 100))
 
 
 if __name__ == '__main__':
     remove_by_random()
     remove_by_confidence()
     remove_by_similarity()
-    # compare_scores(
-    #     args_dirs=[
-    #         'configs/SST-2/most_similar_10_percent_to_combined_removed.json',
-    #         'configs/SST-2/most_similar_10_percent_to_negative_removed.json',
-    #         'configs/SST-2/most_similar_10_percent_to_positive_removed.json',
-    #         'configs/SST-2/least_similar_10_percent_to_combined_removed.json',
-    #         'configs/SST-2/least_similar_10_percent_to_negative_removed.json',
-    #         'configs/SST-2/least_similar_10_percent_to_positive_removed.json',
-    #         # 'configs/SST-2/random_10_percent_removed_combined/0.json',
-    #         # 'configs/SST-2/random_10_percent_removed_positive/0.json',
-    #         # 'configs/SST-2/random_10_percent_removed_negative/0.json',
-    #         # 'configs/SST-2/most_confident_10_percent_removed_positive.json',
-    #         # 'configs/SST-2/most_confident_10_percent_removed_negative.json',
-    #         # 'configs/SST-2/least_confident_10_percent_removed_positive.json',
-    #         # 'configs/SST-2/least_confident_10_percent_removed_negative.json',
-    #     ]
-    # )
+    '''
+    compare_scores(
+        args_dirs=[
+            'configs/SST-2/most_similar_to_combined_dev_removed.json',
+            'configs/SST-2/most_similar_to_negative_dev_removed.json',
+            'configs/SST-2/most_similar_to_positive_dev_removed.json',
+            # 'configs/SST-2/least_similar_to_combined_dev_removed.json',
+            # 'configs/SST-2/least_similar_10_percent_to_negative_removed.json',
+            # 'configs/SST-2/least_similar_10_percent_to_positive_removed.json',
+            # 'configs/SST-2/random_10_percent_removed_combined/0.json',
+            # 'configs/SST-2/random_10_percent_removed_positive/0.json',
+            # 'configs/SST-2/random_10_percent_removed_negative/0.json',
+            # 'configs/SST-2/most_confident_10_percent_removed_positive.json',
+            # 'configs/SST-2/most_confident_10_percent_removed_negative.json',
+            # 'configs/SST-2/least_confident_10_percent_removed_positive.json',
+            # 'configs/SST-2/least_confident_10_percent_removed_negative.json',
+        ]
+    )
+    '''
