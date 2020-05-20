@@ -1,32 +1,43 @@
-# coding=utf-8
-# Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.
-# Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-""" GLUE processors and helpers """
-
-import logging
+'''
+transformers.data.processors.glue
+and transformers.data.datasets.glue
+and transformers.data.metrics.glue
+all in one place so it's easier to add task configurations
+'''
 import os
+import time
+import json
+import logging
 from enum import Enum
+from pathlib import Path
+from dataclasses import dataclass, field
 from typing import List, Optional, Union
+from nltk import word_tokenize
 
-from ...file_utils import is_tf_available
-from ...tokenization_utils import PreTrainedTokenizer
-from .utils import DataProcessor, InputExample, InputFeatures
+import torch
+import torchtext
+from torch.utils.data.dataset import Dataset
 
-
+from transformers import (
+    RobertaTokenizer,
+    RobertaTokenizerFast,
+    PreTrainedTokenizer,
+    XLMRobertaTokenizer,
+    torch_distributed_zero_first,
+    InputFeatures,
+    InputExample,
+    DataProcessor,
+)
+from transformers.data.metrics import (
+    simple_accuracy,
+    acc_and_f1,
+    pearson_and_spearman,
+    matthews_corrcoef,
+)
+from transformers.file_utils import is_tf_available
 if is_tf_available():
     import tensorflow as tf
+
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +227,7 @@ class SnliProcessor(DataProcessor):
 
     def get_dev_examples(self, data_dir):
         """See base class."""
-        return self._create_examples(self._read_tsv(os.path.join(data_dir, "dev_matched.tsv")), "dev_matched")
+        return self._create_examples(self._read_tsv(os.path.join(data_dir, "dev.tsv")), "dev")
 
     def get_labels(self):
         """See base class."""
@@ -553,6 +564,8 @@ glue_tasks_num_labels = {
     "mnli": 3,
     "mrpc": 2,
     "sst-2": 2,
+    "sst-2-orig": 2,
+    "sst-2-glue": 2,
     "sts-b": 1,
     "qqp": 2,
     "qnli": 2,
@@ -567,6 +580,8 @@ glue_processors = {
     "mnli-mm": MnliMismatchedProcessor,
     "mrpc": MrpcProcessor,
     "sst-2": Sst2Processor,
+    "sst-2-orig": Sst2Processor,
+    "sst-2-glue": Sst2Processor,
     "sts-b": StsbProcessor,
     "qqp": QqpProcessor,
     "qnli": QnliProcessor,
@@ -581,9 +596,177 @@ glue_output_modes = {
     "mnli-mm": "classification",
     "mrpc": "classification",
     "sst-2": "classification",
+    "sst-2-glue": "classification",
+    "sst-2-orig": "classification",
     "sts-b": "regression",
     "qqp": "classification",
     "qnli": "classification",
     "rte": "classification",
     "wnli": "classification",
 }
+
+
+@dataclass
+class GlueDataTrainingArguments:
+    """
+    Arguments pertaining to what data we are going to input our model for training and eval.
+
+    Using `HfArgumentParser` we can turn this class
+    into argparse arguments to be able to specify them on
+    the command line.
+    """
+
+    task_name: str = field(metadata={"help": "The name of the task to train on: " + ", ".join(glue_processors.keys())})
+    data_dir: str = field(
+        metadata={"help": "The input data dir. Should contain the .tsv files (or other data files) for the task."}
+    )
+    max_seq_length: int = field(
+        default=128,
+        metadata={
+            "help": "The maximum total input sequence length after tokenization. Sequences longer "
+            "than this will be truncated, sequences shorter will be padded."
+        },
+    )
+    overwrite_cache: bool = field(
+        default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
+    )
+
+    def __post_init__(self):
+        self.task_name = self.task_name.lower()
+
+
+class GlueDataset(Dataset):
+    """
+    This will be superseded by a framework-agnostic approach
+    soon.
+    """
+
+    args: GlueDataTrainingArguments
+    output_mode: str
+    features: List[InputFeatures]
+
+    def __init__(
+        self,
+        args: GlueDataTrainingArguments,
+        tokenizer: PreTrainedTokenizer,
+        limit_length: Optional[int] = None,
+        evaluate=False,
+        local_rank=-1,
+    ):
+        self.args = args
+        processor = glue_processors[args.task_name]()
+        self.output_mode = glue_output_modes[args.task_name]
+        # Load data features from cache or dataset file
+        cached_features_file = os.path.join(
+            args.data_dir,
+            "cached_{}_{}_{}_{}".format(
+                "dev" if evaluate else "train", tokenizer.__class__.__name__, str(args.max_seq_length), args.task_name,
+            ),
+        )
+        with torch_distributed_zero_first(local_rank):
+            # Make sure only the first process in distributed training processes the dataset,
+            # and the others will use the cache.
+
+            if os.path.exists(cached_features_file) and not args.overwrite_cache:
+                start = time.time()
+                self.features = torch.load(cached_features_file)
+                logger.info(
+                    f"Loading features from cached file {cached_features_file} [took %.3f s]", time.time() - start
+                )
+            else:
+                logger.info(f"Creating features from dataset file at {args.data_dir}")
+                label_list = processor.get_labels()
+                if args.task_name in ["mnli", "mnli-mm"] and tokenizer.__class__ in (
+                    RobertaTokenizer,
+                    RobertaTokenizerFast,
+                    XLMRobertaTokenizer,
+                ):
+                    # HACK(label indices are swapped in RoBERTa pretrained model)
+                    label_list[1], label_list[2] = label_list[2], label_list[1]
+                examples = (
+                    processor.get_dev_examples(args.data_dir)
+                    if evaluate
+                    else processor.get_train_examples(args.data_dir)
+                )
+                if limit_length is not None:
+                    examples = examples[:limit_length]
+                self.features = glue_convert_examples_to_features(
+                    examples,
+                    tokenizer,
+                    max_length=args.max_seq_length,
+                    label_list=label_list,
+                    output_mode=self.output_mode,
+                )
+                if local_rank in [-1, 0]:
+                    start = time.time()
+                    torch.save(self.features, cached_features_file)
+                    # ^ This seems to take a lot of time so I want to investigate why and how we can improve.
+                    logger.info(
+                        f"Saving features into cached file %s [took %.3f s]",
+                        cached_features_file, time.time() - start
+                    )
+
+    def __len__(self):
+        return len(self.features)
+
+    def __getitem__(self, i) -> InputFeatures:
+        return self.features[i]
+
+
+def glue_compute_metrics(task_name, preds, labels):
+    assert len(preds) == len(labels)
+    if task_name == "cola":
+        return {"mcc": matthews_corrcoef(labels, preds)}
+    elif task_name == "sst-2":
+        return {"acc": simple_accuracy(preds, labels)}
+    elif task_name == "sst-2-orig":
+        return {"acc": simple_accuracy(preds, labels)}
+    elif task_name == "sst-2-glue":
+        return {"acc": simple_accuracy(preds, labels)}
+    elif task_name == "mrpc":
+        return acc_and_f1(preds, labels)
+    elif task_name == "sts-b":
+        return pearson_and_spearman(preds, labels)
+    elif task_name == "qqp":
+        return acc_and_f1(preds, labels)
+    elif task_name == "snli":
+        return {"acc": simple_accuracy(preds, labels)}
+    elif task_name == "mnli":
+        return {"acc": simple_accuracy(preds, labels)}
+    elif task_name == "mnli-mm":
+        return {"acc": simple_accuracy(preds, labels)}
+    elif task_name == "qnli":
+        return {"acc": simple_accuracy(preds, labels)}
+    elif task_name == "rte":
+        return {"acc": simple_accuracy(preds, labels)}
+    elif task_name == "wnli":
+        return {"acc": simple_accuracy(preds, labels)}
+    elif task_name == "hans":
+        return {"acc": simple_accuracy(preds, labels)}
+    else:
+        raise KeyError(task_name)
+
+
+def orig_sst_from_torchtext():
+    '''
+    construct original version of SST-2 without subtrees in the GLUE format.
+    '''
+    train, dev, test = torchtext.datasets.SST.splits(
+        torchtext.data.Field(batch_first=True, tokenize=word_tokenize, lower=False),
+        torchtext.data.Field(sequential=False, unk_token=None),
+        train_subtrees=False,  # False by default
+    )
+
+    data_dir = 'data/SST-2-ORIG/base'
+    Path(data_dir).mkdir(parents=True, exist_ok=True)
+    with open(os.path.join(data_dir, 'train.tsv'), 'w') as f:
+        f.write('sentence\tlabel\n')
+        for example in train:
+            f.write('{}\t{}\n'.format(
+                ' '.join(example.text),
+                '0' if example.label == 'negative' else '1'
+            ))
+
+
+if __name__ == '__main__':
+    orig_sst_from_torchtext()

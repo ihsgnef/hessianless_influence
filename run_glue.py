@@ -28,17 +28,21 @@ import numpy as np
 import torch
 
 from transformers import BertTokenizer, BertForSequenceClassification
-from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction, GlueDataset
-from transformers import GlueDataTrainingArguments as DataTrainingArguments
+from transformers import AutoConfig, AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction
 from transformers import (
     HfArgumentParser,
     Trainer,
     TrainingArguments,
+    set_seed,
+)
+
+from glue_utils import (
+    GlueDataset,
     glue_compute_metrics,
     glue_output_modes,
     glue_tasks_num_labels,
-    set_seed,
 )
+from glue_utils import GlueDataTrainingArguments as DataTrainingArguments
 
 logger = logging.getLogger(__name__)
 

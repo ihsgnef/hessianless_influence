@@ -6,81 +6,30 @@ from pathlib import Path
 from typing import Dict
 from copy import deepcopy
 from tqdm import tqdm
-from nltk import word_tokenize
 
 import torch
-import torchtext
 import torch.nn.functional as F
 
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction, GlueDataset
-from transformers import GlueDataTrainingArguments as DataTrainingArguments
-from transformers.data.processors.glue import Sst2Processor
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, EvalPrediction
 from transformers import (
     HfArgumentParser,
     Trainer,
     TrainingArguments,
-    glue_compute_metrics,
-    glue_output_modes,
     set_seed,
 )
 
+from glue_utils import (
+    GlueDataset,
+    glue_compute_metrics,
+    glue_output_modes,
+    Sst2Processor,
+)
+from glue_utils import GlueDataTrainingArguments as DataTrainingArguments
 from run_glue import ModelArguments, ExperimentArguments
 
 
 random.seed(42)
 set_seed(42)
-
-
-def sst2_without_subtrees():
-    '''
-    The GLUE version of SST-2 contains subtrees.
-    We construct a SST-2 wo subtrees in the GLUE format.
-    '''
-    train, dev, test = torchtext.datasets.SST.splits(
-        torchtext.data.Field(batch_first=True, tokenize=word_tokenize, lower=False),
-        torchtext.data.Field(sequential=False, unk_token=None),
-        root='data/SST-2/',
-        train_subtrees=False,  # False by default
-    )
-
-    print('train', len(train))
-    print('dev', len(dev))
-    print('test', len(test))
-
-    data_dir = 'data/SST-2/base_10k'
-    output_dir = 'output/SST-2/base_10'
-    config_dir = 'configs/SST-2/base_10k.json'
-    train_data_dir = os.path.join(data_dir, 'train.tsv')
-
-    Path(data_dir).mkdir(parents=True, exist_ok=True)
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-    Path(config_dir).parent.mkdir(parents=True, exist_ok=True)
-
-    args = {
-        "model_type": "bert",
-        "model_name_or_path": "distilbert-base-cased",
-        "task_name": "SST-2",
-        "do_train": True,
-        "do_eval": True,
-        "data_dir": "data/SST-2/base_10k",
-        "max_seq_length": 128,
-        "per_gpu_train_batch_size": 32,
-        "learning_rate": 2e-05,
-        "num_train_epochs": 3.0,
-        "output_dir": "output/SST-2/base_10k",
-        "train_data_dir": "data/SST-2/base_10k",
-        "eval_data_dir": "data/SST-2/base_10k"
-    }
-    with open(config_dir, 'w') as f:
-        json.dump(args, f, indent=4)
-
-    with open(train_data_dir, 'w') as f:
-        f.write('sentence\tlabel\n')
-        for example in train:
-            f.write('{}\t{}\n'.format(
-                ' '.join(example.text),
-                '0' if example.label == 'negative' else '1'
-            ))
 
 
 def setup(
@@ -137,11 +86,13 @@ def setup(
 def create_data_config(
         task_name: str,
         config_name: str,
-        train_examples: list = None,
+        version_name: str,
         version_number: int = None,
+        train_examples: list = None,
 ):
     args = json.load(open('configs/{}/base.json'.format(task_name)))
 
+    config_name += '_{}'.format(version_name)
     if version_number is not None:
         config_name += '/' + str(version_number)
     data_dir = 'data/{}/{}'.format(task_name, config_name)
@@ -392,10 +343,10 @@ def compare_scores(args_dirs: str):
 
 if __name__ == '__main__':
     # sst2_without_subtrees()
-    random_dev_set()
-    remove_by_random()
-    remove_by_confidence()
-    remove_by_similarity()
+    # random_dev_set()
+    # remove_by_random()
+    # remove_by_confidence()
+    # remove_by_similarity()
     # compare_scores(
     #     args_dirs=[
     #         'configs/SST-2/most_similar_to_combined_dev_removed.json',
@@ -413,3 +364,5 @@ if __name__ == '__main__':
     #         # 'configs/SST-2/least_confident_10_percent_removed_negative.json',
     #     ]
     # )
+
+    model, trainer, train_dataset, eval_dataset = setup('configs/SST-2/base.json')
