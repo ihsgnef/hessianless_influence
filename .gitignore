@@ -1,6 +1,10 @@
 glue_data
 data
+.data
 __pycache__
 runs
+logs
 output
 .ipynb_checkpoints
+*.out
+*.swp

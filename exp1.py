@@ -1,11 +1,13 @@
 import os
 import json
+import glob
 import random
 import numpy as np
 from pathlib import Path
 from typing import Dict
 from copy import deepcopy
 from tqdm import tqdm
+from pprint import pprint
 
 import torch
 import torch.nn.functional as F
@@ -20,9 +22,9 @@ from transformers import (
 
 from glue_utils import (
     GlueDataset,
+    glue_processors,
     glue_compute_metrics,
     glue_output_modes,
-    Sst2Processor,
 )
 from glue_utils import GlueDataTrainingArguments as DataTrainingArguments
 from run_glue import ModelArguments, ExperimentArguments
@@ -86,13 +88,11 @@ def setup(
 def create_data_config(
         task_name: str,
         config_name: str,
-        version_name: str,
         version_number: int = None,
         train_examples: list = None,
 ):
     args = json.load(open('configs/{}/base.json'.format(task_name)))
 
-    config_name += '_{}'.format(version_name)
     if version_number is not None:
         config_name += '/' + str(version_number)
     data_dir = 'data/{}/{}'.format(task_name, config_name)
@@ -113,7 +113,7 @@ def create_data_config(
     with open(config_dir, 'w') as f:
         json.dump(args, f, indent=4)
 
-    if task_name == 'SST-2':
+    if task_name.startswith('SST-2'):
         with open(train_data_dir, 'w') as f:
             f.write('sentence\tlabel\n')
             for example in train_examples:
@@ -129,9 +129,10 @@ def create_data_config(
                     i, example.text_a, example.text_b, example.label))
 
 
-def random_dev_set():
-    sst_processor = Sst2Processor()
-    dev_examples = sst_processor.get_dev_examples('glue_data/SST-2')
+def random_dev_set(task_name: str = None, n_examples: int = 50):
+    task_names = [task_name] if task_name else ['SST-2-GLUE', 'SST-2-ORIG']
+    processor = glue_processors[task_names[0].lower()]()
+    dev_examples = processor.get_dev_examples('data/{}/base'.format(task_names[0]))
 
     datasets = {
         'combined': dev_examples,
@@ -139,55 +140,58 @@ def random_dev_set():
         'positive': [x for x in dev_examples if x.label == '1'],
     }
 
-    path = 'data/SST-2/base/'
-    Path(path).mkdir(parents=True, exist_ok=True)
-    output_file = open(path + 'dev.tsv', 'w')
-    output_file.write('sentence\tlabel\n')
-    n_examples = 50
+    random_examples = []
     for fold, examples in datasets.items():
         random.shuffle(examples)
-        for example in examples[:n_examples]:
-            output_file.write('{}\t{}\n'.format(example.text_a, example.label))
-    output_file.close()
+        random_examples += examples[:n_examples]
+
+    for task_name in task_names:
+        path = 'data/{}/dev_{}'.format(task_name, n_examples * 3)
+        Path(path).mkdir(parents=True, exist_ok=True)
+        with open(os.path.join(path, 'dev.tsv'), 'w') as output_file:
+            output_file.write('sentence\tlabel\n')
+            for example in random_examples:
+                output_file.write('{}\t{}\n'.format(example.text_a, example.label))
 
 
-def remove_by_random():
-    all_examples = Sst2Processor().get_train_examples('data/SST-2/base')
+def remove_by_random(task_name: str, percentage: int = 10, n_trials: int = 3):
+    processor = glue_processors[task_name.lower()]()
+    all_examples = processor.get_train_examples('data/{}/base'.format(task_name))
     negative_examples = [x for x in all_examples if x.label == '0']
     positive_examples = [x for x in all_examples if x.label == '1']
-    n_examples_removed = int(0.1 * len(all_examples))
-    n_trials = 3
+    n_examples_removed = int(percentage / 100 * len(all_examples))
 
     for i in range(n_trials):
         random.shuffle(all_examples)
         create_data_config(
-            'SST-2',
-            config_name='random_10_percent_removed_combined',
-            train_examples=all_examples[n_examples_removed:],
+            task_name=task_name,
+            config_name='random_{}_percent_removed_combined'.format(percentage),
             version_number=i,
+            train_examples=all_examples[n_examples_removed:],
         )
 
     for i in range(n_trials):
         random.shuffle(positive_examples)
         create_data_config(
-            'SST-2',
-            config_name='random_10_percent_removed_positive',
-            train_examples=positive_examples[n_examples_removed:] + negative_examples,
+            task_name,
+            config_name='random_{}_percent_removed_positive'.format(percentage),
             version_number=i,
+            train_examples=positive_examples[n_examples_removed:] + negative_examples,
         )
 
     for i in range(n_trials):
         random.shuffle(negative_examples)
         create_data_config(
-            'SST-2',
-            config_name='random_10_percent_removed_negative',
-            train_examples=negative_examples[n_examples_removed:] + positive_examples,
+            task_name,
+            config_name='random_{}_percent_removed_negative'.format(percentage),
             version_number=i,
+            train_examples=negative_examples[n_examples_removed:] + positive_examples,
         )
 
 
-def remove_by_confidence():
-    model, trainer, train_dataset, eval_dataset = setup(args_dir='configs/SST-2/base.json')
+def remove_by_confidence(task_name: str, percentage: int = 10):
+    args_dir = 'configs/{}/base.json'.format(task_name)
+    model, trainer, train_dataset, eval_dataset = setup(args_dir=args_dir)
 
     output = trainer.predict(train_dataset)
     scores = F.softmax(torch.from_numpy(output.predictions), dim=-1).numpy()
@@ -202,29 +206,30 @@ def remove_by_confidence():
     most_confident_positive_indices = positive_indices[np.argsort(-positive_scores)]
     most_confident_negative_indices = negative_indices[np.argsort(-negative_scores)]
 
-    train_examples = Sst2Processor().get_train_examples('data/SST-2/base')
-    n_removed = int(0.1 * len(train_examples))
+    processor = glue_processors[task_name.lower()]()
+    train_examples = processor.get_train_examples('data/{}/base'.format(task_name))
+    n_removed = int(percentage / 100 * len(train_examples))
 
     datasets = {
-        'most_confident_combined_removed': (
+        'most_confident_{}_percent_removed_combined'.format(percentage): (
             [train_examples[i] for i in most_confident_combined_indices[n_removed:]]
         ),
-        'most_confident_positive_removed': (
+        'most_confident_{}_percent_removed_positive'.format(percentage): (
             [train_examples[i] for i in most_confident_positive_indices[n_removed:]]
             + [train_examples[i] for i in negative_indices]
         ),
-        'most_confident_negative_removed': (
+        'most_confident_{}_percent_removed_negative'.format(percentage): (
             [train_examples[i] for i in most_confident_negative_indices[n_removed:]]
             + [train_examples[i] for i in positive_indices]
         ),
-        'least_confident_combined_removed': (
+        'least_confident_{}_percent_removed_combined'.format(percentage): (
             [train_examples[i] for i in most_confident_combined_indices[::-1][n_removed:]]
         ),
-        'least_confident_positive_removed': (
+        'least_confident_{}_percent_removed_positive'.format(percentage): (
             [train_examples[i] for i in most_confident_positive_indices[::-1][n_removed:]]
             + [train_examples[i] for i in negative_indices]
         ),
-        'least_confident_negative_removed': (
+        'least_confident_{}_percent_removed_negative'.format(percentage): (
             [train_examples[i] for i in most_confident_negative_indices[::-1][n_removed:]]
             + [train_examples[i] for i in positive_indices]
         ),
@@ -232,18 +237,22 @@ def remove_by_confidence():
 
     for config_name, train_examples in datasets.items():
         create_data_config(
-            'SST-2',
+            task_name,
             config_name=config_name,
             train_examples=train_examples,
         )
 
 
-def remove_by_similarity():
+def remove_by_similarity(task_name: str, eval_name: str, percentage: int = 10,
+                         eval_data_dir: str = None):
     """
     for each example in the target test set, find the training examples with the most similar final
     representation, accumulate the score over all test examples, remove the top 10%
     """
-    model, trainer, train_dataset, eval_dataset = setup(args_dir='configs/SST-2/base.json')
+    model, trainer, train_dataset, eval_dataset = setup(
+        args_dir='configs/{}/base.json'.format(task_name),
+        eval_data_dir=eval_data_dir
+    )
     model.eval()
 
     # use eval dataloader to avoid shuffling
@@ -267,8 +276,9 @@ def remove_by_similarity():
     pooled_outputs = {k: np.concatenate(v, axis=0) for k, v in pooled_outputs.items()}
     similarity = pooled_outputs['eval'] @ pooled_outputs['train'].T
 
-    train_examples = Sst2Processor().get_train_examples('data/SST-2/base')
-    n_removed = int(0.1 * len(train_examples))
+    processor = glue_processors[task_name.lower()]()
+    train_examples = processor.get_train_examples('data/{}/base'.format(task_name))
+    n_removed = int(percentage / 100 * len(train_examples))
 
     eval_subset_indices = {
         'combined': list(range(len(eval_dataset))),
@@ -277,23 +287,30 @@ def remove_by_similarity():
     }
 
     for fold, indices in eval_subset_indices.items():
+        # take the mean distance between each training examples and all dev examples in this fold
         most_similar_indices = np.argsort(-similarity[indices].mean(axis=0))
 
+        # most_similar_10_percent_to_positive_50dev_removed
         create_data_config(
-            'SST-2',
-            config_name='most_similar_to_{}_dev_removed'.format(fold),
+            task_name=task_name,
+            config_name='most_dot_similar_{}_percent_to_{}_{}_removed'.format(
+                percentage, fold, eval_name),
             train_examples=[train_examples[i] for i in most_similar_indices[n_removed:]],
         )
 
         create_data_config(
-            'SST-2',
-            config_name='least_similar_to_{}_dev_removed'.format(fold),
+            task_name=task_name,
+            config_name='least_dot_similar_{}_percent_to_{}_{}_removed'.format(
+                percentage, fold, eval_name),
             train_examples=[train_examples[i] for i in most_similar_indices[::-1][n_removed:]],
         )
 
 
-def compare_scores(args_dirs: str):
-    model, trainer, train_dataset, eval_dataset = setup(args_dir='configs/SST-2/base.json')
+def compare_scores(task_name: str, args_dirs: str, eval_data_dir: str):
+    model, trainer, train_dataset, eval_dataset = setup(
+        args_dir='configs/{}/base.json'.format(task_name),
+        eval_data_dir=eval_data_dir
+    )
     output_original = trainer.predict(eval_dataset)
     scores_original = np.choose(
         output_original.label_ids,
@@ -342,27 +359,32 @@ def compare_scores(args_dirs: str):
 
 
 if __name__ == '__main__':
-    # sst2_without_subtrees()
     # random_dev_set()
-    # remove_by_random()
-    # remove_by_confidence()
-    # remove_by_similarity()
-    # compare_scores(
-    #     args_dirs=[
-    #         'configs/SST-2/most_similar_to_combined_dev_removed.json',
-    #         'configs/SST-2/most_similar_to_negative_dev_removed.json',
-    #         'configs/SST-2/most_similar_to_positive_dev_removed.json',
-    #         'configs/SST-2/least_similar_to_combined_dev_removed.json',
-    #         'configs/SST-2/least_similar_to_negative_dev_removed.json',
-    #         'configs/SST-2/least_similar_to_positive_dev_removed.json',
-    #         # 'configs/SST-2/random_10_percent_removed_combined/0.json',
-    #         # 'configs/SST-2/random_10_percent_removed_positive/0.json',
-    #         # 'configs/SST-2/random_10_percent_removed_negative/0.json',
-    #         # 'configs/SST-2/most_confident_10_percent_removed_positive.json',
-    #         # 'configs/SST-2/most_confident_10_percent_removed_negative.json',
-    #         # 'configs/SST-2/least_confident_10_percent_removed_positive.json',
-    #         # 'configs/SST-2/least_confident_10_percent_removed_negative.json',
-    #     ]
-    # )
+    # remove_by_random('SST-2-GLUE')
+    # remove_by_random('SST-2-ORIG')
+    # remove_by_confidence('SST-2-GLUE')
+    # remove_by_confidence('SST-2-ORIG')
+    # remove_by_similarity(task_name='SST-2-ORIG', eval_name='dev',
+    #                      eval_data_dir='data/SST-2-ORIG/base')
+    # remove_by_similarity(task_name='SST-2-ORIG', eval_name='dev_150',
+    #                      eval_data_dir='data/SST-2-ORIG/dev_150')
+    # remove_by_similarity(task_name='SST-2-GLUE', eval_name='dev',
+    #                      eval_data_dir='data/SST-2-GLUE/base')
+    # remove_by_similarity(task_name='SST-2-GLUE', eval_name='dev_150',
+    #                      eval_data_dir='data/SST-2-GLUE/dev_150')
+    args_dirs = []
+    for i, filename in enumerate(glob.iglob('configs/SST-2-GLUE/**/*.json', recursive=True)):
+        if 'base' in filename:
+            continue
+        with open(filename) as f:
+            args = json.load(f)
+            checkpoint_dir = os.path.join(args['output_dir'], 'pytorch_model.bin')
+            if os.path.exists(checkpoint_dir):
+                args_dirs.append(filename)
+    pprint(args_dirs)
 
-    model, trainer, train_dataset, eval_dataset = setup('configs/SST-2/base.json')
+    compare_scores(
+        task_name='SST-2-GLUE',
+        args_dirs=args_dirs,
+        eval_data_dir='data/SST-2-GLUE/base',
+    )

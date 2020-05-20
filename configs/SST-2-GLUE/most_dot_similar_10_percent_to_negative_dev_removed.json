@@ -10,7 +10,7 @@
     "learning_rate": 2e-05,
     "num_train_epochs": 3.0,
     "save_steps": 0,
-    "output_dir": "output/SST-2-GLUE/base",
-    "train_data_dir": "data/SST-2-GLUE/base",
+    "output_dir": "output/SST-2-GLUE/most_dot_similar_10_percent_to_negative_dev_removed",
+    "train_data_dir": "data/SST-2-GLUE/most_dot_similar_10_percent_to_negative_dev_removed",
     "eval_data_dir": "data/SST-2-GLUE/base"
 }
