@@ -130,62 +130,96 @@ def create_data_config(
 
 
 def random_dev_set(task_name: str = None, n_examples: int = 50):
-    task_names = [task_name] if task_name else ['SST-2-GLUE', 'SST-2-ORIG']
-    processor = glue_processors[task_names[0].lower()]()
-    dev_examples = processor.get_dev_examples('data/{}/base'.format(task_names[0]))
+    processor = glue_processors[task_name.lower()]()
+    dev_examples = processor.get_dev_examples('data/{}/base'.format(task_name))
 
     datasets = {
-        'combined': dev_examples,
-        'negative': [x for x in dev_examples if x.label == '0'],
-        'positive': [x for x in dev_examples if x.label == '1'],
+        'combined': [],
+        'entailment': [],
+        'contradiction': [],
+        'neutral': [],
     }
+    for example in dev_examples:
+        datasets[example.label].append(example)
+        datasets['combined'].append(example)
 
     random_examples = []
     for fold, examples in datasets.items():
         random.shuffle(examples)
         random_examples += examples[:n_examples]
 
-    for task_name in task_names:
-        path = 'data/{}/dev_{}'.format(task_name, n_examples * 3)
-        Path(path).mkdir(parents=True, exist_ok=True)
-        with open(os.path.join(path, 'dev.tsv'), 'w') as output_file:
-            output_file.write('sentence\tlabel\n')
-            for example in random_examples:
-                output_file.write('{}\t{}\n'.format(example.text_a, example.label))
+    path = 'data/{}/dev_{}'.format(task_name, n_examples * len(datasets))
+    Path(path).mkdir(parents=True, exist_ok=True)
+    with open(os.path.join(path, 'dev.tsv'), 'w') as f:
+        f.write(('Index\t' + 'NULL\t' * 6
+                 + 'sentence1\tsentence2\t' + 'NULL\t' * 5
+                 + 'gold_label\n'))
+        for i, example in enumerate(random_examples):
+            f.write(('{}\t' + 'NULL\t' * 6 + '{}\t{}\t' + 'NULL\t' * 5 + '{}\n').format(
+                i, example.text_a, example.text_b, example.label))
 
 
 def remove_by_random(task_name: str, percentage: int = 10, n_trials: int = 3):
     processor = glue_processors[task_name.lower()]()
     all_examples = processor.get_train_examples('data/{}/base'.format(task_name))
-    negative_examples = [x for x in all_examples if x.label == '0']
-    positive_examples = [x for x in all_examples if x.label == '1']
     n_examples_removed = int(percentage / 100 * len(all_examples))
 
+    datasets = {
+        'combined': [],
+        'entailment': [],
+        'contradiction': [],
+        'neutral': [],
+    }
+    for example in all_examples:
+        datasets[example.label].append(example)
+        datasets['combined'].append(example)
+
     for i in range(n_trials):
-        random.shuffle(all_examples)
+        random.shuffle(datasets['combined'])
         create_data_config(
             task_name=task_name,
             config_name='random_{}_percent_removed_combined'.format(percentage),
             version_number=i,
-            train_examples=all_examples[n_examples_removed:],
+            train_examples=datasets['combined'][n_examples_removed:],
         )
 
     for i in range(n_trials):
-        random.shuffle(positive_examples)
+        random.shuffle(datasets['entailment'])
         create_data_config(
             task_name,
-            config_name='random_{}_percent_removed_positive'.format(percentage),
+            config_name='random_{}_percent_removed_entailment'.format(percentage),
             version_number=i,
-            train_examples=positive_examples[n_examples_removed:] + negative_examples,
+            train_examples=(
+                datasets['entailment'][n_examples_removed:]
+                + datasets['contradiction']
+                + datasets['neutral']
+            ),
         )
 
     for i in range(n_trials):
-        random.shuffle(negative_examples)
+        random.shuffle(datasets['contradiction'])
         create_data_config(
             task_name,
-            config_name='random_{}_percent_removed_negative'.format(percentage),
+            config_name='random_{}_percent_removed_contradiction'.format(percentage),
             version_number=i,
-            train_examples=negative_examples[n_examples_removed:] + positive_examples,
+            train_examples=(
+                datasets['entailment']
+                + datasets['contradiction'][n_examples_removed:]
+                + datasets['neutral']
+            ),
+        )
+
+    for i in range(n_trials):
+        random.shuffle(datasets['neutral'])
+        create_data_config(
+            task_name,
+            config_name='random_{}_percent_removed_neutral'.format(percentage),
+            version_number=i,
+            train_examples=(
+                datasets['entailment']
+                + datasets['contradiction']
+                + datasets['neutral'][n_examples_removed:]
+            ),
         )
 
 
@@ -359,32 +393,27 @@ def compare_scores(task_name: str, args_dirs: str, eval_data_dir: str):
 
 
 if __name__ == '__main__':
-    # random_dev_set()
-    # remove_by_random('SST-2-GLUE')
-    # remove_by_random('SST-2-ORIG')
+    # random_dev_set('SNLI')
+    # remove_by_random('SNLI')
     # remove_by_confidence('SST-2-GLUE')
-    # remove_by_confidence('SST-2-ORIG')
     # remove_by_similarity(task_name='SST-2-ORIG', eval_name='dev',
     #                      eval_data_dir='data/SST-2-ORIG/base')
-    # remove_by_similarity(task_name='SST-2-ORIG', eval_name='dev_150',
-    #                      eval_data_dir='data/SST-2-ORIG/dev_150')
-    # remove_by_similarity(task_name='SST-2-GLUE', eval_name='dev',
-    #                      eval_data_dir='data/SST-2-GLUE/base')
-    # remove_by_similarity(task_name='SST-2-GLUE', eval_name='dev_150',
-    #                      eval_data_dir='data/SST-2-GLUE/dev_150')
-    args_dirs = []
-    for i, filename in enumerate(glob.iglob('configs/SST-2-GLUE/**/*.json', recursive=True)):
-        if 'base' in filename:
-            continue
-        with open(filename) as f:
-            args = json.load(f)
-            checkpoint_dir = os.path.join(args['output_dir'], 'pytorch_model.bin')
-            if os.path.exists(checkpoint_dir):
-                args_dirs.append(filename)
-    pprint(args_dirs)
+    # remove_by_similarity(task_name='SST-2-ORIG', eval_name='dev_200',
+    #                      eval_data_dir='data/SST-2-ORIG/dev_200')
+    # args_dirs = []
+    # for i, filename in enumerate(glob.iglob('configs/SNLI/**/*.json', recursive=True)):
+    #     if 'base' in filename:
+    #         continue
+    #     with open(filename) as f:
+    #         args = json.load(f)
+    #         checkpoint_dir = os.path.join(args['output_dir'], 'pytorch_model.bin')
+    #         if os.path.exists(checkpoint_dir):
+    #             args_dirs.append(filename)
+    # pprint(args_dirs)
 
-    compare_scores(
-        task_name='SST-2-GLUE',
-        args_dirs=args_dirs,
-        eval_data_dir='data/SST-2-GLUE/base',
-    )
+    # compare_scores(
+    #     task_name='SST-2-GLUE',
+    #     args_dirs=args_dirs,
+    #     eval_data_dir='data/SST-2-GLUE/base',
+    # )
+    pass
