@@ -151,8 +151,8 @@ def main():
         cache_dir=model_args.cache_dir,
     )
 
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-    model = BertForSequenceClassification.from_pretrained('bert-base-uncased')
+    # tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+    # model = BertForSequenceClassification.from_pretrained('bert-base-uncased')
 
     input_ids = torch.tensor(tokenizer.encode("Hello, my dog is cute", add_special_tokens=True)).unsqueeze(0)  # Batch size 1
     labels = torch.tensor([1]).unsqueeze(0)  # Batch size 1

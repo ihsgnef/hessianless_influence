@@ -2,12 +2,14 @@ import os
 import json
 import glob
 import random
+import itertools
 import numpy as np
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 from copy import deepcopy
 from tqdm import tqdm
-from pprint import pprint
+from numpy.linalg import norm
+from scipy.spatial.distance import cdist
 
 import torch
 import torch.nn.functional as F
@@ -145,6 +147,13 @@ def random_dev_set(task_name: str = None, n_examples: int = 50):
         random.shuffle(examples)
         random_examples += examples[:n_examples]
 
+    file_pathes = [
+        'data/{}/dev_{}'.format(task_name, n_examples * 3)
+        for task_name in task_names
+    ]
+    if all(os.path.exists(fp) for fp in file_pathes):
+        return
+
     for task_name in task_names:
         path = 'data/{}/dev_{}'.format(task_name, n_examples * 3)
         Path(path).mkdir(parents=True, exist_ok=True)
@@ -189,18 +198,21 @@ def remove_by_random(task_name: str, percentage: int = 10, n_trials: int = 3):
         )
 
 
-def remove_by_confidence(task_name: str, percentage: int = 10):
+def remove_by_confidence(task_name: str, percentage: int = 10, use_prediction: bool = False):
     args_dir = 'configs/{}/base.json'.format(task_name)
     model, trainer, train_dataset, eval_dataset = setup(args_dir=args_dir)
 
     output = trainer.predict(train_dataset)
     scores = F.softmax(torch.from_numpy(output.predictions), dim=-1).numpy()
-    scores = np.choose(output.label_ids, scores.T)
+    predictions = np.argmax(output.predictions, axis=1)
     indices = np.arange(len(scores))
-    positive_indices = indices[output.label_ids == 1]
-    negative_indices = indices[output.label_ids == 0]
-    positive_scores = scores[output.label_ids == 1]
-    negative_scores = scores[output.label_ids == 0]
+    labels = predictions if use_prediction else output.label_ids
+
+    scores = np.choose(labels, scores.T)
+    positive_indices = indices[labels == 1]
+    negative_indices = indices[labels == 0]
+    positive_scores = scores[labels == 1]
+    negative_scores = scores[labels == 0]
 
     most_confident_combined_indices = np.argsort(-scores)
     most_confident_positive_indices = positive_indices[np.argsort(-positive_scores)]
@@ -211,25 +223,31 @@ def remove_by_confidence(task_name: str, percentage: int = 10):
     n_removed = int(percentage / 100 * len(train_examples))
 
     datasets = {
-        'most_confident_{}_percent_removed_combined'.format(percentage): (
+        'most_confident_{}_percent_removed_combined{}'.format(
+            percentage, '_predicted' if use_prediction else ''): (
             [train_examples[i] for i in most_confident_combined_indices[n_removed:]]
         ),
-        'most_confident_{}_percent_removed_positive'.format(percentage): (
+        'most_confident_{}_percent_removed_positive{}'.format(
+            percentage, '_predicted' if use_prediction else ''): (
             [train_examples[i] for i in most_confident_positive_indices[n_removed:]]
             + [train_examples[i] for i in negative_indices]
         ),
-        'most_confident_{}_percent_removed_negative'.format(percentage): (
+        'most_confident_{}_percent_removed_negative{}'.format(
+            percentage, '_predicted' if use_prediction else ''): (
             [train_examples[i] for i in most_confident_negative_indices[n_removed:]]
             + [train_examples[i] for i in positive_indices]
         ),
-        'least_confident_{}_percent_removed_combined'.format(percentage): (
+        'least_confident_{}_percent_removed_combined{}'.format(
+            percentage, '_predicted' if use_prediction else ''): (
             [train_examples[i] for i in most_confident_combined_indices[::-1][n_removed:]]
         ),
-        'least_confident_{}_percent_removed_positive'.format(percentage): (
+        'least_confident_{}_percent_removed_positive{}'.format(
+            percentage, '_predicted' if use_prediction else ''): (
             [train_examples[i] for i in most_confident_positive_indices[::-1][n_removed:]]
             + [train_examples[i] for i in negative_indices]
         ),
-        'least_confident_{}_percent_removed_negative'.format(percentage): (
+        'least_confident_{}_percent_removed_negative{}'.format(
+            percentage, '_predicted' if use_prediction else ''): (
             [train_examples[i] for i in most_confident_negative_indices[::-1][n_removed:]]
             + [train_examples[i] for i in positive_indices]
         ),
@@ -243,15 +261,18 @@ def remove_by_confidence(task_name: str, percentage: int = 10):
         )
 
 
-def remove_by_similarity(task_name: str, eval_name: str, percentage: int = 10,
-                         eval_data_dir: str = None):
+def remove_by_similarity(
+        task_name: str,
+        eval_name: str,
+        percentage: int = 10,
+        similarity_metric: str = 'dot'):
     """
     for each example in the target test set, find the training examples with the most similar final
     representation, accumulate the score over all test examples, remove the top 10%
     """
     model, trainer, train_dataset, eval_dataset = setup(
         args_dir='configs/{}/base.json'.format(task_name),
-        eval_data_dir=eval_data_dir
+        eval_data_dir='data/{}/{}'.format(task_name, eval_name),
     )
     model.eval()
 
@@ -274,7 +295,16 @@ def remove_by_similarity(task_name: str, eval_name: str, percentage: int = 10,
                 pooled_output = outputs[1]
                 pooled_outputs[fold].append(pooled_output.detach().cpu().numpy())
     pooled_outputs = {k: np.concatenate(v, axis=0) for k, v in pooled_outputs.items()}
-    similarity = pooled_outputs['eval'] @ pooled_outputs['train'].T
+
+    # similarity is a (n_eval, n_train) matrix
+    if similarity_metric == 'dot':
+        similarity = pooled_outputs['eval'] @ pooled_outputs['train'].T
+    elif similarity_metric == 'cosine':
+        # cosine(a, b) = a @ b.T / (norm(a) * norm(b))
+        a, b = pooled_outputs['eval'], pooled_outputs['train']
+        similarity = (a @ b.T) / np.outer(norm(a, axis=1), norm(b, axis=1))
+    elif similarity_metric == 'l2':
+        similarity = cdist(pooled_outputs['eval'], pooled_outputs['train'])
 
     processor = glue_processors[task_name.lower()]()
     train_examples = processor.get_train_examples('data/{}/base'.format(task_name))
@@ -293,98 +323,100 @@ def remove_by_similarity(task_name: str, eval_name: str, percentage: int = 10,
         # most_similar_10_percent_to_positive_50dev_removed
         create_data_config(
             task_name=task_name,
-            config_name='most_dot_similar_{}_percent_to_{}_{}_removed'.format(
-                percentage, fold, eval_name),
+            config_name='most_{}_similar_{}_percent_to_{}_{}_removed'.format(
+                similarity_metric, percentage, fold, eval_name),
             train_examples=[train_examples[i] for i in most_similar_indices[n_removed:]],
         )
 
         create_data_config(
             task_name=task_name,
-            config_name='least_dot_similar_{}_percent_to_{}_{}_removed'.format(
-                percentage, fold, eval_name),
+            config_name='least_{}_similar_{}_percent_to_{}_{}_removed'.format(
+                similarity_metric, percentage, fold, eval_name),
             train_examples=[train_examples[i] for i in most_similar_indices[::-1][n_removed:]],
         )
 
 
-def compare_scores(task_name: str, args_dirs: str, eval_data_dir: str):
+def get_eval_predictions(task_name: str, args_dir: str, eval_name: str):
+    prediction_dir = os.path.join(
+        json.load(open(args_dir))['output_dir'],
+        'predictions_{}.npy'.format(eval_name),
+    )
+    if os.path.exists(prediction_dir):
+        return np.load(prediction_dir)
+
     model, trainer, train_dataset, eval_dataset = setup(
-        args_dir='configs/{}/base.json'.format(task_name),
-        eval_data_dir=eval_data_dir
+        args_dir=args_dir,
+        eval_data_dir='data/{}/{}'.format(task_name, eval_name),
     )
-    output_original = trainer.predict(eval_dataset)
+    output = trainer.predict(eval_dataset)
+    np.save(prediction_dir, output.predictions)
+    return output.predictions
+
+
+def compare_scores_to_base(task_name: str, eval_name: str, args_dir_list: List[str], ):
+    base_args_dir = 'configs/{}/base.json'.format(task_name)
+    _, _, _, eval_dataset = setup(
+        args_dir=base_args_dir,
+        eval_data_dir='data/{}/{}'.format(task_name, eval_name),
+    )
+    labels = np.array([x.label for x in eval_dataset])
+
+    predictions_original = get_eval_predictions(task_name, base_args_dir, eval_name)
     scores_original = np.choose(
-        output_original.label_ids,
-        F.softmax(torch.from_numpy(output_original.predictions), dim=-1).numpy().T,
+        labels,
+        F.softmax(torch.from_numpy(predictions_original), dim=-1).numpy().T,
     )
-    predictions_original = np.argmax(output_original.predictions, axis=1)
-    print('original predictions: {} positive {} negative'.format(
-        sum(predictions_original),
-        len(predictions_original) - sum(predictions_original)
-    ))
 
-    print('original labels: {} positive {} negative'.format(
-        sum(output_original.label_ids),
-        len(output_original.label_ids) - sum(output_original.label_ids)
-    ))
-
-    for args_dir in args_dirs:
-        print(args_dir)
-        model, trainer, _, _ = setup(args_dir=args_dir)
-        output_modified = trainer.predict(eval_dataset)
-        predictions_modified = np.argmax(output_modified.predictions, axis=1)
-        predictions = {
-            'combined': predictions_modified,
-            'negative': predictions_modified[output_modified.label_ids == 0],
-            'positive': predictions_modified[output_modified.label_ids == 1],
-        }
-
+    for args_dir in args_dir_list:
+        predictions_modified = get_eval_predictions(task_name, args_dir, eval_name)
         scores_modified = np.choose(
-            output_modified.label_ids,
-            F.softmax(torch.from_numpy(output_modified.predictions), dim=-1).numpy().T,
+            labels,
+            F.softmax(torch.from_numpy(predictions_modified), dim=-1).numpy().T,
         )
         scores_diff = {
             'combined': scores_modified - scores_original,
-            'negative': (scores_modified - scores_original)[output_modified.label_ids == 0],
-            'positive': (scores_modified - scores_original)[output_modified.label_ids == 1],
+            'negative': (scores_modified - scores_original)[labels == 0],
+            'positive': (scores_modified - scores_original)[labels == 1],
         }
 
+        print(task_name, eval_name, args_dir)
         for fold, diff in scores_diff.items():
-            print('{} predictions: {} positive {} negative'.format(
-                fold,
-                sum(predictions[fold]),
-                len(predictions[fold]) - sum(predictions[fold])
-            ))
-            print('{}: {}{:.4f}%'.format(fold, '+' if np.mean(diff) > 0 else '',
-                                         np.mean(diff) * 100))
+            # print('{} predictions: {} positive {} negative'.format(
+            #     fold,
+            #     sum(predictions[fold]),
+            #     len(predictions[fold]) - sum(predictions[fold])
+            # ))
+            print('{}: {:.4f}%'.format(fold, np.mean(diff) * 100))
 
 
 if __name__ == '__main__':
-    random_dev_set()
+    # random_dev_set()
     # remove_by_random('SST-2-GLUE')
     # remove_by_random('SST-2-ORIG')
     # remove_by_confidence('SST-2-GLUE')
     # remove_by_confidence('SST-2-ORIG')
-    # remove_by_similarity(task_name='SST-2-ORIG', eval_name='dev',
-    #                      eval_data_dir='data/SST-2-ORIG/base')
-    # remove_by_similarity(task_name='SST-2-ORIG', eval_name='dev_150',
-    #                      eval_data_dir='data/SST-2-ORIG/dev_150')
-    # remove_by_similarity(task_name='SST-2-GLUE', eval_name='dev',
-    #                      eval_data_dir='data/SST-2-GLUE/base')
-    # remove_by_similarity(task_name='SST-2-GLUE', eval_name='dev_150',
-    #                      eval_data_dir='data/SST-2-GLUE/dev_150')
-    # args_dirs = []
-    # for i, filename in enumerate(glob.iglob('configs/SST-2-GLUE/**/*.json', recursive=True)):
-    #     if 'base' in filename:
-    #         continue
-    #     with open(filename) as f:
-    #         args = json.load(f)
-    #         checkpoint_dir = os.path.join(args['output_dir'], 'pytorch_model.bin')
-    #         if os.path.exists(checkpoint_dir):
-    #             args_dirs.append(filename)
-    # pprint(args_dirs)
+    # remove_by_confidence('SST-2-GLUE', use_prediction=True)
+    # remove_by_confidence('SST-2-ORIG', use_prediction=True)
 
-    # compare_scores(
-    #     task_name='SST-2-GLUE',
-    #     args_dirs=args_dirs,
-    #     eval_data_dir='data/SST-2-GLUE/base',
-    # )
+    task_names = ['SST-2-ORIG', 'SST-2-GLUE']
+    similarity_metrics = ['dot', 'cosine', 'l2']
+    eval_names = ['base', 'dev_150']
+
+    # for task_name, similarity_metric, eval_name in itertools.product(
+    #         task_names, similarity_metrics, eval_names):
+    #     remove_by_similarity(task_name=task_name,
+    #                          eval_name=eval_name,
+    #                          similarity_metric=similarity_metric)
+
+    for task_name, eval_name in itertools.product(task_names, eval_names):
+        args_dir_list = []
+        for i, args_dir in enumerate(glob.iglob('configs/{}/**/*.json'.format(task_name), recursive=True)):
+            checkpoint_dir = os.path.join(json.load(open(args_dir))['output_dir'],
+                                          'pytorch_model.bin')
+
+            if os.path.exists(checkpoint_dir):
+                # print(args_dir)
+                args_dir_list.append(args_dir)
+                # predictions = get_eval_predictions(task_name, args_dir, eval_name)
+        print()
+        compare_scores_to_base(task_name, eval_name, args_dir_list)

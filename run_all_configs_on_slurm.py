@@ -1,12 +1,14 @@
+import os
+import json
 import glob
 import subprocess
 
 header = '''#!/bin/bash
 #SBATCH --partition=gpu
-#SBATCH --qos=gpu-medium
+#SBATCH --qos=gpu-short
 #SBATCH --gres=gpu:1
-#SBATCH --job-name=snli
-#SBATCH --time=1-00:00:00
+#SBATCH --job-name=sstorig
+#SBATCH --time=0-02:00:00
 #SBATCH --chdir=/fs/clip-scratch/shifeng/influenceless
 #SBATCH --exclude=materialgpu00
 
@@ -14,9 +16,14 @@ nvidia-smi
 
 '''
 
-for i, filename in enumerate(glob.iglob('configs/SNLI/**/*.json', recursive=True)):
-    if 'base' in filename:
+task_name = 'SST-2-GLUE'
+
+for i, filename in enumerate(glob.iglob('configs/{}/**/*.json'.format(task_name), recursive=True)):
+    args = json.load(open(filename))
+    checkpoint_dir = os.path.join(args['output_dir'], 'pytorch_model.bin')
+    if os.path.exists(checkpoint_dir):
         continue
+
     print(filename)
     with open('run.slurm', 'w') as f:
         f.write(header)
