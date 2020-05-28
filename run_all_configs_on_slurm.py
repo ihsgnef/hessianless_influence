@@ -10,6 +10,8 @@ header = '''#!/bin/bash
 #SBATCH --job-name=sstorig
 #SBATCH --time=0-02:00:00
 #SBATCH --chdir=/fs/clip-scratch/shifeng/influenceless
+#SBATCH --cpus-per-task=2
+#SBATCH --mem-per-cpu=20g
 #SBATCH --exclude=materialgpu00
 
 nvidia-smi

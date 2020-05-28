@@ -5,6 +5,7 @@ configs
 !configs/SST-2-ORIG/base.json
 !configs/SST-2-GLUE/base.json
 !configs/SNLI/base.json
+!configs/MNLI/base.json
 __pycache__
 runs
 logs

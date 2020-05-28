@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --partition=gpu
-#SBATCH --qos=gpu-short
-#SBATCH --gres=gpu:1
-#SBATCH --job-name=sstorig
-#SBATCH --time=0-02:00:00
+#SBATCH --qos=gpu-medium
+#SBATCH --gres=gpu:3
+#SBATCH --job-name=snli
+#SBATCH --time=1-00:00:00
 #SBATCH --chdir=/fs/clip-scratch/shifeng/influenceless
 #SBATCH --exclude=materialgpu00
 
 nvidia-smi
 
-python run_glue.py configs/SST-2-GLUE/least_cosine_similar_10_percent_to_combined_dev-679_removed.json
+python run_glue.py configs/SNLI/base.json
