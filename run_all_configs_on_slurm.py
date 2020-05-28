@@ -16,8 +16,8 @@ nvidia-smi
 
 '''
 
-task_name = 'SST-2-ORIG'
-must_have_substrings = ['dot']
+task_name = 'SST-2-GLUE'
+must_have_substrings = ['similar']
 
 for i, filename in enumerate(glob.iglob(f'configs/{task_name}/**/*.json', recursive=True)):
     args = json.load(open(filename))

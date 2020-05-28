@@ -8,7 +8,7 @@ import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 from collections import defaultdict
-from typing import Dict
+from typing import Dict, List
 from copy import deepcopy
 from pprint import pprint
 from numpy.linalg import norm
@@ -109,13 +109,13 @@ def create_data_config(
         version_number: int = None,
         train_examples: list = None,
 ):
-    args = json.load(open('configs/{}/base.json'.format(task_name)))
+    args = json.load(open(f'configs/{task_name}/base.json'))
 
     if version_number is not None:
         config_name += '/' + str(version_number)
-    data_dir = 'data/{}/{}'.format(task_name, config_name)
-    output_dir = 'output/{}/{}'.format(task_name, config_name)
-    config_dir = 'configs/{}/{}.json'.format(task_name, config_name)
+    data_dir = f'data/{task_name}/{config_name}'
+    output_dir = f'output/{task_name}/{config_name}'
+    config_dir = f'configs/{task_name}/{config_name}.json'
     train_data_dir = os.path.join(data_dir, 'train.tsv')
 
     Path(data_dir).mkdir(parents=True, exist_ok=True)
@@ -135,7 +135,7 @@ def create_data_config(
         with open(train_data_dir, 'w') as f:
             f.write('sentence\tlabel\n')
             for example in train_examples:
-                f.write('{}\t{}\n'.format(example.text_a, example.label))
+                f.write(f'{example.text_a}\t{example.label}\n')
 
     if task_name == 'SNLI':
         with open(train_data_dir, 'w') as f:
@@ -151,7 +151,7 @@ def random_dev_set(task_name: str = None, n_examples: int = 50):
     """create random subset of the dev set"""
     task_names = [task_name] if task_name else ['SST-2-GLUE', 'SST-2-ORIG']
     processor = glue_processors[task_names[0].lower()]()
-    dev_examples = processor.get_dev_examples('data/{}/base'.format(task_names[0]))
+    dev_examples = processor.get_dev_examples(f'data/{task_names[0]}/base')
 
     datasets = {
         'combined': dev_examples,
@@ -165,26 +165,26 @@ def random_dev_set(task_name: str = None, n_examples: int = 50):
         random_examples += examples[:n_examples]
 
     file_paths = [
-        'data/{}/dev_{}'.format(task_name, n_examples * 3)
+        f'data/{task_name}/dev_{n_examples * 3}'
         for task_name in task_names
     ]
     if all(os.path.exists(fp) for fp in file_paths):
         return
 
     for task_name in task_names:
-        path = 'data/{}/dev_{}'.format(task_name, n_examples * 3)
+        path = f'data/{task_name}/dev_{n_examples * 3}'
         Path(path).mkdir(parents=True, exist_ok=True)
         with open(os.path.join(path, 'dev.tsv'), 'w') as output_file:
             output_file.write('sentence\tlabel\n')
             for example in random_examples:
-                output_file.write('{}\t{}\n'.format(example.text_a, example.label))
+                output_file.write(f'{example.text_a}\t{example.label}\n')
 
 
 def random_individual_dev_set(task_name: str = None, n_examples: int = 50):
     """use random individual dev examples as dev sets"""
     task_names = [task_name] if task_name else ['SST-2-GLUE', 'SST-2-ORIG']
     processor = glue_processors[task_names[0].lower()]()
-    dev_examples = processor.get_dev_examples('data/{}/base'.format(task_names[0]))
+    dev_examples = processor.get_dev_examples(f'data/{task_names[0]}/base')
 
     datasets = {
         'negative': [x for x in dev_examples if x.label == '0'],
@@ -202,16 +202,16 @@ def random_individual_dev_set(task_name: str = None, n_examples: int = 50):
 
     for task_name in task_names:
         for example in random_examples:
-            path = 'data/{}/{}'.format(task_name, example.guid)
+            path = f'data/{task_name}/{example.guid}'
             Path(path).mkdir(parents=True, exist_ok=True)
             with open(os.path.join(path, 'dev.tsv'), 'w') as output_file:
                 output_file.write('sentence\tlabel\n')
-                output_file.write('{}\t{}\n'.format(example.text_a, example.label))
+                output_file.write(f'{example.text_a}\t{example.label}\n')
 
 
 def remove_by_random(task_name: str, percentage: int = 10, n_trials: int = 3):
     processor = glue_processors[task_name.lower()]()
-    all_examples = processor.get_train_examples('data/{}/base'.format(task_name))
+    all_examples = processor.get_train_examples(f'data/{task_name}/base')
     negative_examples = [x for x in all_examples if x.label == '0']
     positive_examples = [x for x in all_examples if x.label == '1']
     n_examples_removed = int(percentage / 100 * len(all_examples))
@@ -220,7 +220,7 @@ def remove_by_random(task_name: str, percentage: int = 10, n_trials: int = 3):
         random.shuffle(all_examples)
         create_data_config(
             task_name=task_name,
-            config_name='random_{}_percent_removed_combined'.format(percentage),
+            config_name=f'random_{percentage}_percent_removed_combined',
             version_number=i,
             train_examples=all_examples[n_examples_removed:],
         )
@@ -229,7 +229,7 @@ def remove_by_random(task_name: str, percentage: int = 10, n_trials: int = 3):
         random.shuffle(positive_examples)
         create_data_config(
             task_name,
-            config_name='random_{}_percent_removed_positive'.format(percentage),
+            config_name=f'random_{percentage}_percent_removed_positive',
             version_number=i,
             train_examples=positive_examples[n_examples_removed:] + negative_examples,
         )
@@ -238,14 +238,14 @@ def remove_by_random(task_name: str, percentage: int = 10, n_trials: int = 3):
         random.shuffle(negative_examples)
         create_data_config(
             task_name,
-            config_name='random_{}_percent_removed_negative'.format(percentage),
+            config_name=f'random_{percentage}_percent_removed_negative',
             version_number=i,
             train_examples=negative_examples[n_examples_removed:] + positive_examples,
         )
 
 
 def remove_by_confidence(task_name: str, percentage: int = 10, use_prediction: bool = False):
-    args_dir = 'configs/{}/base.json'.format(task_name)
+    args_dir = f'configs/{task_name}/base.json'
     model, trainer, train_dataset, eval_dataset = setup(args_dir=args_dir)
 
     output = trainer.predict(train_dataset)
@@ -265,7 +265,7 @@ def remove_by_confidence(task_name: str, percentage: int = 10, use_prediction: b
     most_confident_negative_indices = negative_indices[np.argsort(-negative_scores)]
 
     processor = glue_processors[task_name.lower()]()
-    train_examples = processor.get_train_examples('data/{}/base'.format(task_name))
+    train_examples = processor.get_train_examples(f'data/{task_name}/base')
     n_removed = int(percentage / 100 * len(train_examples))
 
     datasets = {
@@ -308,7 +308,7 @@ def remove_by_confidence(task_name: str, percentage: int = 10, use_prediction: b
 
 
 def get_pooled_output(task_name: str, fold: str, eval_name: str = 'base'):
-    base_args_dir = 'configs/{}/base.json'.format(task_name)
+    base_args_dir = f'configs/{task_name}/base.json'
     args = json.load(open(base_args_dir))
 
     if fold == 'train':
@@ -321,7 +321,7 @@ def get_pooled_output(task_name: str, fold: str, eval_name: str = 'base'):
 
     model, trainer, train_dataset, eval_dataset = setup(
         args_dir=base_args_dir,
-        eval_data_dir='data/{}/{}'.format(task_name, eval_name),
+        eval_data_dir=f'data/{task_name}/{eval_name}'
     )
 
     # use eval dataloader to avoid shuffling
@@ -375,7 +375,7 @@ def remove_by_similarity(
 
     eval_dataset = get_eval_dataset(
         task_name=task_name,
-        eval_data_dir='data/{}/{}'.format(task_name, eval_name),
+        eval_data_dir=f'data/{task_name}/{eval_name}',
     )
 
     pooled_outputs = {
@@ -396,7 +396,7 @@ def remove_by_similarity(
         similarity = cdist(pooled_outputs['eval'], pooled_outputs['train'])
 
     processor = glue_processors[task_name.lower()]()
-    train_examples = processor.get_train_examples('data/{}/base'.format(task_name))
+    train_examples = processor.get_train_examples(f'data/{task_name}/base')
     n_removed = int(percentage / 100 * len(train_examples))
 
     eval_subset_indices = {
@@ -429,7 +429,7 @@ def remove_by_similarity(
 
 
 def get_gradient_wrt_pooled_output(task_name: str, fold: str, eval_name: str = 'base'):
-    base_args_dir = 'configs/{}/base.json'.format(task_name)
+    base_args_dir = f'configs/{task_name}/base.json'
     args = json.load(open(base_args_dir))
 
     if fold == 'train':
@@ -442,7 +442,7 @@ def get_gradient_wrt_pooled_output(task_name: str, fold: str, eval_name: str = '
 
     model, trainer, train_dataset, eval_dataset = setup(
         args_dir=base_args_dir,
-        eval_data_dir='data/{}/{}'.format(task_name, eval_name),
+        eval_data_dir=f'data/{task_name}/{eval_name}',
     )
 
     # use eval dataloader to avoid shuffling
@@ -455,7 +455,6 @@ def get_gradient_wrt_pooled_output(task_name: str, fold: str, eval_name: str = '
     for inputs in tqdm(data_loader):
         model.zero_grad()
         model.eval()
-        inputs = next(iter(data_loader))
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
         labels = inputs.pop('labels')
         pooled_output = model.bert(**inputs)[1]
@@ -501,11 +500,10 @@ def remove_by_gradient_similarity(
 
     eval_dataset = get_eval_dataset(
         task_name=task_name,
-        eval_data_dir='data/{}/{}'.format(task_name, eval_name),
+        eval_data_dir=f'data/{task_name}/{eval_name}',
     )
 
     gradients = {
-        # TODO
         'train': get_gradient_wrt_pooled_output(task_name, fold='train', eval_name=eval_name),
         'eval': get_gradient_wrt_pooled_output(task_name, fold='eval', eval_name=eval_name),
     }
@@ -521,7 +519,7 @@ def remove_by_gradient_similarity(
         similarity = cdist(gradients['eval'], gradients['train'])
 
     processor = glue_processors[task_name.lower()]()
-    train_examples = processor.get_train_examples('data/{}/base'.format(task_name))
+    train_examples = processor.get_train_examples(f'data/{task_name}/base')
     n_removed = int(percentage / 100 * len(train_examples))
 
     eval_subset_indices = {
@@ -532,6 +530,8 @@ def remove_by_gradient_similarity(
             'negative': [i for i, x in enumerate(eval_dataset) if x.label == 0],
             'positive': [i for i, x in enumerate(eval_dataset) if x.label == 1],
         })
+
+    _, _, train_dataset, _ = setup(f'configs/{task_name}/base.json')
 
     for fold, indices in eval_subset_indices.items():
         # take the mean distance between each training examples and all dev examples in this fold
@@ -556,27 +556,26 @@ def remove_by_gradient_similarity(
 def get_eval_predictions(task_name: str, args_dir: str, eval_name: str):
     prediction_dir = os.path.join(
         json.load(open(args_dir))['output_dir'],
-        'predictions_{}.npy'.format(eval_name),
+        f'predictions_{eval_name}.npy',
     )
     if os.path.exists(prediction_dir):
         return np.load(prediction_dir)
 
     model, trainer, train_dataset, eval_dataset = setup(
         args_dir=args_dir,
-        eval_data_dir='data/{}/{}'.format(task_name, eval_name),
+        eval_data_dir=f'data/{task_name}/{eval_name}',
     )
     output = trainer.predict(eval_dataset)
     np.save(prediction_dir, output.predictions)
     return output.predictions
 
 
-def compare_scores_to_base():
+def compare_scores_to_base(task_names: List[str]):
     '''
     get the average diff of each config on all eval datasets
     configs that are specific to a dev set is converted,
     e.g. `most_similar_to_dev-24` -> `most_similar_to` so they are merged
     '''
-    task_names = ['SST-2-ORIG']
     # eval_names = ['base', 'dev_150']
     eval_names = [os.path.basename(x) for x in glob.iglob('data/SST-2-GLUE/dev-*')]
 
@@ -603,13 +602,13 @@ def compare_scores_to_base():
         '''get eval dataset labels and predictions from the base model'''
         eval_dataset = get_eval_dataset(
             task_name=task_name,
-            eval_data_dir='data/{}/{}'.format(task_name, eval_name),
+            eval_data_dir=f'data/{task_name}/{eval_name}',
         )
         labels = np.array([x.label for x in eval_dataset])
 
         predictions_by_base = get_eval_predictions(
             task_name=task_name,
-            args_dir='configs/{}/base.json'.format(task_name),
+            args_dir=f'configs/{task_name}/base.json',
             eval_name=eval_name)
         confidence_by_base = np.choose(
             labels,
@@ -627,15 +626,22 @@ def compare_scores_to_base():
                 F.softmax(torch.from_numpy(predictions), dim=-1).numpy().T,
             )
             # remove config's dependency on this specific dev set
-            config_name = re.compile('dev-[\d]*_').sub('', args_dir)
+            config_name = re.compile('dev-[\d]*_').sub('dev-*_', args_dir)
             confidence_minus_base[config_name][eval_name] = np.mean(confidence - confidence_by_base) * 100
 
     # average each config over all eval_names
     # confidence_minus_base[args_dir] = average diff in confidence between config and base on all eval_names
-    scores = {k: (len(v), np.mean(list(v.values()))) for k, v in confidence_minus_base.items()}
-    # sort configs by largest average drop in confidence
+    scores = {}
+    for config_name, diffs in confidence_minus_base.items():
+        diffs = list(diffs.values())
+        scores[config_name] = (
+            len(diffs),
+            np.mean(diffs),
+            np.std(diffs),
+        )
+    # sort configs by largest mean drop in confidence
     scores = sorted(scores.items(), key=lambda x: x[1][1])
-    pprint(scores[:10])
+    pprint(scores)
 
 
 if __name__ == '__main__':
@@ -648,16 +654,23 @@ if __name__ == '__main__':
     # remove_by_confidence('SST-2-GLUE', use_prediction=True)
     # remove_by_confidence('SST-2-ORIG', use_prediction=True)
 
-    task_names = ['SST-2-ORIG']
+    task_names = ['SST-2-GLUE']
     similarity_metrics = ['dot']
-    eval_names = [os.path.basename(x) for x in glob.iglob('data/SST-2-GLUE/dev-*')]
+    eval_names = [os.path.basename(x) for x in glob.iglob('data/SST-2-ORIG/dev-*')]
 
     for task_name, similarity_metric, eval_name in itertools.product(
             task_names, similarity_metrics, eval_names):
         print(task_name, similarity_metric, eval_name)
-        remove_by_gradient_similarity(task_name=task_name,
-                                      eval_name=eval_name,
-                                      similarity_metric=similarity_metric,
-                                      all_folds=False)
+        # remove_by_gradient_similarity(task_name=task_name,
+        #                               eval_name=eval_name,
+        #                               similarity_metric=similarity_metric,
+        #                               all_folds=False)
 
-    # compare_scores_to_base()
+        # remove_by_similarity(task_name=task_name,
+        #                      eval_name=eval_name,
+        #                      similarity_metric=similarity_metric,
+        #                      all_folds=False)
+
+        pass
+
+    compare_scores_to_base(['SST-2-GLUE'])
