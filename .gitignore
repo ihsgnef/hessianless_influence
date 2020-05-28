@@ -1,6 +1,5 @@
 glue_data
 data
-configs
 .data
 __pycache__
 runs
