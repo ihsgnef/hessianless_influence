@@ -1,0 +1,16 @@
+{
+    "model_type": "distilbert",
+    "model_name_or_path": "distilbert-base-cased",
+    "task_name": "SST-2-ORIG",
+    "do_train": true,
+    "do_eval": true,
+    "data_dir": "data/SST-2-ORIG/base",
+    "max_seq_length": 128,
+    "per_gpu_train_batch_size": 32,
+    "learning_rate": 2e-05,
+    "num_train_epochs": 3.0,
+    "save_steps": 0,
+    "output_dir": "output/SST-2-ORIG/most_dot_gradient_similar_10_percent_to_combined_dev-826_removed",
+    "train_data_dir": "data/SST-2-ORIG/most_dot_gradient_similar_10_percent_to_combined_dev-826_removed",
+    "eval_data_dir": "data/SST-2-ORIG/base"
+}

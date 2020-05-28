@@ -16,12 +16,17 @@ nvidia-smi
 
 '''
 
-task_name = 'SST-2-GLUE'
+task_name = 'SST-2-ORIG'
+must_have_substrings = ['dot']
 
-for i, filename in enumerate(glob.iglob('configs/{}/**/*.json'.format(task_name), recursive=True)):
+for i, filename in enumerate(glob.iglob(f'configs/{task_name}/**/*.json', recursive=True)):
     args = json.load(open(filename))
+
     checkpoint_dir = os.path.join(args['output_dir'], 'pytorch_model.bin')
     if os.path.exists(checkpoint_dir):
+        continue
+
+    if not all(x in filename for x in must_have_substrings):
         continue
 
     print(filename)

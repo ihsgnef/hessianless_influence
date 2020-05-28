@@ -9,4 +9,4 @@
 
 nvidia-smi
 
-python run_glue.py configs/SST-2-ORIG/least_cosine_similar_10_percent_to_positive_dev_150_removed.json
+python run_glue.py configs/SST-2-ORIG/most_dot_gradient_similar_10_percent_to_combined_dev-379_removed.json
