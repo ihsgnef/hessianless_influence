@@ -654,23 +654,40 @@ if __name__ == '__main__':
     # remove_by_confidence('SST-2-GLUE', use_prediction=True)
     # remove_by_confidence('SST-2-ORIG', use_prediction=True)
 
-    task_names = ['SST-2-GLUE']
-    similarity_metrics = ['dot']
-    eval_names = [os.path.basename(x) for x in glob.iglob('data/SST-2-ORIG/dev-*')]
+    # task_names = ['SST-2-GLUE']
+    # similarity_metrics = ['dot']
+    # eval_names = [os.path.basename(x) for x in glob.iglob('data/SST-2-ORIG/dev-*')]
 
-    for task_name, similarity_metric, eval_name in itertools.product(
-            task_names, similarity_metrics, eval_names):
-        print(task_name, similarity_metric, eval_name)
-        # remove_by_gradient_similarity(task_name=task_name,
-        #                               eval_name=eval_name,
-        #                               similarity_metric=similarity_metric,
-        #                               all_folds=False)
+    # for task_name, similarity_metric, eval_name in itertools.product(
+    #         task_names, similarity_metrics, eval_names):
+    #     print(task_name, similarity_metric, eval_name)
+    #     # remove_by_gradient_similarity(task_name=task_name,
+    #     #                               eval_name=eval_name,
+    #     #                               similarity_metric=similarity_metric,
+    #     #                               all_folds=False)
 
-        # remove_by_similarity(task_name=task_name,
-        #                      eval_name=eval_name,
-        #                      similarity_metric=similarity_metric,
-        #                      all_folds=False)
+    #     # remove_by_similarity(task_name=task_name,
+    #     #                      eval_name=eval_name,
+    #     #                      similarity_metric=similarity_metric,
+    #     #                      all_folds=False)
 
-        pass
+    #     pass
 
     compare_scores_to_base(['SST-2-GLUE'])
+
+    # eval_names = [os.path.basename(x) for x in glob.iglob('configs/SST-2-ORIG/most_dot_gradient_similar_10_percent_to_combined_dev-*')]
+    # eval_re = re.compile('dev-[\d]*_')
+    # eval_indices = [eval_re.findall(x)[0][:-1] for x in eval_names]
+
+    # processor = glue_processors['sst-2-orig']()
+    # dev_examples = processor.get_dev_examples('data/SST-2-ORIG/base')
+    # dev_examples = {example.guid: example for example in dev_examples}
+    # random_examples = [dev_examples[i] for i in eval_indices]
+
+    # for task_name in ['SST-2-ORIG', 'SST-2-GLUE']:
+    #     for example in random_examples:
+    #         path = f'data/{task_name}/{example.guid}'
+    #         Path(path).mkdir(parents=True, exist_ok=True)
+    #         with open(os.path.join(path, 'dev.tsv'), 'w') as output_file:
+    #             output_file.write('sentence\tlabel\n')
+    #             output_file.write(f'{example.text_a}\t{example.label}\n')
