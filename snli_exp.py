@@ -181,11 +181,10 @@ def random_individual_dev_set(task_name: str = None, n_examples: int = 30):
             write_snli_examples_to_file(os.path.join(path, 'dev.tsv'), [example])
 
 
-def remove_by_random(task_name: str, percentage: int = 10, n_trials: int = 3):
+def remove_by_random(task_name: str, percentage: int = 10, n_trials: int = 3, all_folds: str = False):
     processor = glue_processors[task_name.lower()]()
     all_examples = processor.get_train_examples(f'data/{task_name}/base')
-    negative_examples = [x for x in all_examples if x.label == '0']
-    positive_examples = [x for x in all_examples if x.label == '1']
+
     n_examples_removed = int(percentage / 100 * len(all_examples))
 
     for i in range(n_trials):
@@ -197,24 +196,25 @@ def remove_by_random(task_name: str, percentage: int = 10, n_trials: int = 3):
             train_examples=all_examples[n_examples_removed:],
         )
 
-    for i in range(n_trials):
-        random.shuffle(positive_examples)
-        create_data_config(
-            task_name,
-            config_name=f'random_{percentage}_percent_removed_positive',
-            version_number=i,
-            train_examples=positive_examples[n_examples_removed:] + negative_examples,
-        )
-
-    for i in range(n_trials):
-        random.shuffle(negative_examples)
-        create_data_config(
-            task_name,
-            config_name=f'random_{percentage}_percent_removed_negative',
-            version_number=i,
-            train_examples=negative_examples[n_examples_removed:] + positive_examples,
-        )
-
+    if all_folds:
+        datasets = {
+            'entailment': [x for x in all_examples if x.label == 'entailment'],
+            'contradiction': [x for x in all_examples if x.label == 'contradiction'],
+            'neutral': [x for x in all_examples if x.label == 'neutral'],
+        }
+        for fold, examples in datasets:
+            for i in range(n_trials):
+                random.shuffle(examples)
+                random_examples = (
+                    examples[n_examples_removed:]
+                    + itertools.chain(*[v for k, v in datasets.items() if k != fold])
+                )
+                create_data_config(
+                    task_name,
+                    config_name=f'random_{percentage}_percent_removed_{fold}',
+                    version_number=i,
+                    train_examples=random_examples,
+                )
 
 def remove_by_confidence(task_name: str, percentage: int = 10, use_prediction: bool = False):
     args_dir = f'configs/{task_name}/base.json'
@@ -223,18 +223,10 @@ def remove_by_confidence(task_name: str, percentage: int = 10, use_prediction: b
     output = trainer.predict(train_dataset)
     scores = F.softmax(torch.from_numpy(output.predictions), dim=-1).numpy()
     predictions = np.argmax(output.predictions, axis=1)
-    indices = np.arange(len(scores))
     labels = predictions if use_prediction else output.label_ids
 
     scores = np.choose(labels, scores.T)
-    positive_indices = indices[labels == 1]
-    negative_indices = indices[labels == 0]
-    positive_scores = scores[labels == 1]
-    negative_scores = scores[labels == 0]
-
     most_confident_combined_indices = np.argsort(-scores)
-    most_confident_positive_indices = positive_indices[np.argsort(-positive_scores)]
-    most_confident_negative_indices = negative_indices[np.argsort(-negative_scores)]
 
     processor = glue_processors[task_name.lower()]()
     train_examples = processor.get_train_examples(f'data/{task_name}/base')
@@ -245,29 +237,9 @@ def remove_by_confidence(task_name: str, percentage: int = 10, use_prediction: b
             percentage, '_predicted' if use_prediction else ''): (
             [train_examples[i] for i in most_confident_combined_indices[n_removed:]]
         ),
-        'most_confident_{}_percent_removed_positive{}'.format(
-            percentage, '_predicted' if use_prediction else ''): (
-            [train_examples[i] for i in most_confident_positive_indices[n_removed:]]
-            + [train_examples[i] for i in negative_indices]
-        ),
-        'most_confident_{}_percent_removed_negative{}'.format(
-            percentage, '_predicted' if use_prediction else ''): (
-            [train_examples[i] for i in most_confident_negative_indices[n_removed:]]
-            + [train_examples[i] for i in positive_indices]
-        ),
         'least_confident_{}_percent_removed_combined{}'.format(
             percentage, '_predicted' if use_prediction else ''): (
             [train_examples[i] for i in most_confident_combined_indices[::-1][n_removed:]]
-        ),
-        'least_confident_{}_percent_removed_positive{}'.format(
-            percentage, '_predicted' if use_prediction else ''): (
-            [train_examples[i] for i in most_confident_positive_indices[::-1][n_removed:]]
-            + [train_examples[i] for i in negative_indices]
-        ),
-        'least_confident_{}_percent_removed_negative{}'.format(
-            percentage, '_predicted' if use_prediction else ''): (
-            [train_examples[i] for i in most_confident_negative_indices[::-1][n_removed:]]
-            + [train_examples[i] for i in positive_indices]
         ),
     }
 
@@ -289,7 +261,7 @@ def get_pooled_output(task_name: str, fold: str, eval_name: str = 'base'):
         pooled_output_dir = os.path.join(args['output_dir'], f'pooled_output_{eval_name}.npy')
 
     if os.path.exists(pooled_output_dir):
-        return np.load(pooled_output_dir, allow_pickle=True)
+        return np.load(pooled_output_dir)
 
     model, trainer, train_dataset, eval_dataset = setup(
         args_dir=base_args_dir,
@@ -307,12 +279,17 @@ def get_pooled_output(task_name: str, fold: str, eval_name: str = 'base'):
         for k, v in inputs.items():
             inputs[k] = v.to(model.device)
         with torch.no_grad():
-            outputs = model.bert(
+            outputs = model.distilbert(
                 input_ids=inputs['input_ids'],
                 attention_mask=inputs['attention_mask'],
-                token_type_ids=inputs['token_type_ids'],
             )
-            pooled_output.append(outputs[1].detach().cpu().numpy())
+            hidden_state = outputs[0]  # (bs, seq_len, dim)
+            hidden_state = hidden_state[:, 0]  # (bs, dim)
+            hidden_state = model.pre_classifier(hidden_state)  # (bs, dim)
+            hidden_state = torch.nn.ReLU()(hidden_state)  # (bs, dim)
+            hidden_state = model.dropout(hidden_state)  # (bs, dim)
+            pooled_output.append(hidden_state.detach().cpu().numpy())
+    pooled_output = np.concatenate(pooled_output, axis=0)
     np.save(pooled_output_dir, pooled_output)
     return pooled_output
 
@@ -329,7 +306,7 @@ def remove_by_similarity(
     """
     folds = ['combined']
     if all_folds:
-        folds += ['negative', 'positive']
+        folds += ['entailment', 'contradiction', 'neutral']
 
     file_paths = [
         'most_{}_similar_{}_percent_to_{}_{}_removed'.format(
@@ -355,8 +332,6 @@ def remove_by_similarity(
         'eval': get_pooled_output(task_name, fold='eval', eval_name=eval_name),
     }
 
-    pooled_outputs = {k: np.concatenate(v, axis=0) for k, v in pooled_outputs.items()}
-
     # similarity is a (n_eval, n_train) matrix
     if similarity_metric == 'dot':
         similarity = pooled_outputs['eval'] @ pooled_outputs['train'].T
@@ -376,8 +351,9 @@ def remove_by_similarity(
     }
     if all_folds:
         eval_subset_indices.update({
-            'negative': [i for i, x in enumerate(eval_dataset) if x.label == 0],
-            'positive': [i for i, x in enumerate(eval_dataset) if x.label == 1],
+            'contradiction': [i for i, x in enumerate(eval_dataset) if x.label == 0],
+            'entailment': [i for i, x in enumerate(eval_dataset) if x.label == 1],
+            'neutral': [i for i, x in enumerate(eval_dataset) if x.label == 2],
         })
 
     for fold, indices in eval_subset_indices.items():
@@ -429,9 +405,16 @@ def get_gradient_wrt_pooled_output(task_name: str, fold: str, eval_name: str = '
         model.eval()
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
         labels = inputs.pop('labels')
-        pooled_output = model.bert(**inputs)[1]
-        pooled_output = model.dropout(pooled_output)
-        logits = model.classifier(pooled_output)
+        outputs = model.distilbert(
+            input_ids=inputs['input_ids'],
+            attention_mask=inputs['attention_mask'],
+        )
+        pooled_output = outputs[0]  # (bs, seq_len, dim)
+        pooled_output = pooled_output[:, 0]  # (bs, dim)
+        pooled_output = model.pre_classifier(pooled_output)  # (bs, dim)
+        pooled_output = torch.nn.ReLU()(pooled_output)  # (bs, dim)
+        pooled_output = model.dropout(pooled_output)  # (bs, dim)
+        logits = model.classifier(pooled_output)  # (bs, dim)
         loss = torch.nn.CrossEntropyLoss()(logits.view(-1, model.num_labels), labels.view(-1))
         grad = torch.autograd.grad(loss, pooled_output)[0]
         gradient_wrt_pooled_output.append(grad.detach().cpu().numpy())
@@ -455,16 +438,18 @@ def remove_by_gradient_similarity(
     if all_folds:
         folds += ['negative', 'positive']
 
-    file_paths = [
-        'most_{}_gradient_similar_{}_percent_to_{}_{}_removed'.format(
-            similarity_metric, percentage, fold, eval_name)
-        for fold in folds
-    ]
-    # + [
-    #     'least_{}_gradient_similar_{}_percent_to_{}_{}_removed'.format(
-    #         similarity_metric, percentage, fold, eval_name)
-    #     for fold in folds
-    # ]
+    file_paths = (
+        # [
+        #     'most_{}_gradient_similar_{}_percent_to_{}_{}_removed'.format(
+        #         similarity_metric, percentage, fold, eval_name)
+        #     for fold in folds
+        # ] +
+        [
+            'least_{}_gradient_similar_{}_percent_to_{}_{}_removed'.format(
+                similarity_metric, percentage, fold, eval_name)
+            for fold in folds
+        ]
+    )
     file_paths = [os.path.join(f'data/{task_name}', fp) for fp in file_paths]
 
     if all(os.path.exists(fp) for fp in file_paths):
@@ -510,19 +495,19 @@ def remove_by_gradient_similarity(
         most_similar_indices = np.argsort(-similarity[indices].mean(axis=0))
 
         # most_similar_10_percent_to_positive_50dev_removed
-        create_data_config(
-            task_name=task_name,
-            config_name='most_{}_gradient_similar_{}_percent_to_{}_{}_removed'.format(
-                similarity_metric, percentage, fold, eval_name),
-            train_examples=[train_examples[i] for i in most_similar_indices[n_removed:]],
-        )
-
         # create_data_config(
         #     task_name=task_name,
-        #     config_name='least_{}_gradient_similar_{}_percent_to_{}_{}_removed'.format(
+        #     config_name='most_{}_gradient_similar_{}_percent_to_{}_{}_removed'.format(
         #         similarity_metric, percentage, fold, eval_name),
-        #     train_examples=[train_examples[i] for i in most_similar_indices[::-1][n_removed:]],
+        #     train_examples=[train_examples[i] for i in most_similar_indices[n_removed:]],
         # )
+
+        create_data_config(
+            task_name=task_name,
+            config_name='least_{}_gradient_similar_{}_percent_to_{}_{}_removed'.format(
+                similarity_metric, percentage, fold, eval_name),
+            train_examples=[train_examples[i] for i in most_similar_indices[::-1][n_removed:]],
+        )
 
 
 def get_eval_predictions(task_name: str, args_dir: str, eval_name: str):
@@ -549,7 +534,7 @@ def compare_scores_to_base(task_names: List[str]):
     e.g. `most_similar_to_dev-24` -> `most_similar_to` so they are merged
     '''
     # eval_names = ['base', 'dev_150']
-    eval_names = [os.path.basename(x) for x in glob.iglob('data/SST-2-GLUE/dev-*')]
+    eval_names = [os.path.basename(x) for x in glob.iglob('data/SNLI/dev-*')]
 
     # confidence_minus_base[args_dir][eval_name] = diff of confidence between config and base model
     confidence_minus_base = defaultdict(dict)
@@ -617,31 +602,25 @@ def compare_scores_to_base(task_names: List[str]):
 
 
 if __name__ == '__main__':
-    random_individual_dev_set(task_name='SNLI', n_examples=30)
-    # remove_by_random('SST-2-GLUE')
-    # remove_by_random('SST-2-ORIG')
-    # remove_by_confidence('SST-2-GLUE')
-    # remove_by_confidence('SST-2-ORIG')
-    # remove_by_confidence('SST-2-GLUE', use_prediction=True)
-    # remove_by_confidence('SST-2-ORIG', use_prediction=True)
+    # random_individual_dev_set(task_name='SNLI', n_examples=30)
+    # remove_by_random('SNLI', n_trials=3, all_folds=False)
+    # remove_by_confidence('SNLI')
+    # remove_by_confidence('SNLI', use_prediction=True)
 
-    # task_names = ['SST-2-GLUE']
-    # similarity_metrics = ['dot']
-    # eval_names = [os.path.basename(x) for x in glob.iglob('data/SST-2-ORIG/dev-*')]
+    similarity_metrics = ['cosine', 'dot']
+    eval_names = [os.path.basename(x) for x in glob.iglob('data/SNLI/dev-*')]
 
-    # for task_name, similarity_metric, eval_name in itertools.product(
-    #         task_names, similarity_metrics, eval_names):
-    #     print(task_name, similarity_metric, eval_name)
-    #     # remove_by_gradient_similarity(task_name=task_name,
-    #     #                               eval_name=eval_name,
-    #     #                               similarity_metric=similarity_metric,
-    #     #                               all_folds=False)
+    for similarity_metric, eval_name in itertools.product(similarity_metrics, eval_names):
+        print(similarity_metric, eval_name)
+        remove_by_gradient_similarity(task_name='SNLI',
+                                      eval_name=eval_name,
+                                      similarity_metric=similarity_metric,
+                                      all_folds=False)
 
-    #     # remove_by_similarity(task_name=task_name,
-    #     #                      eval_name=eval_name,
-    #     #                      similarity_metric=similarity_metric,
-    #     #                      all_folds=False)
+        # remove_by_similarity(task_name='SNLI',
+        #                      eval_name=eval_name,
+        #                      similarity_metric=similarity_metric,
+        #                      all_folds=False)
+        pass
 
-    #     pass
-
-    # compare_scores_to_base(['SST-2-GLUE'])
+    compare_scores_to_base(['SNLI'])
