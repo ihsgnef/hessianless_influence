@@ -3,4 +3,4 @@ scipy
 sklearn
 torch==1.5.0
 dataclasses
-transformers==2.9.1
+transformers==4.30.0
